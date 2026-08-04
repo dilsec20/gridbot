@@ -1,0 +1,17 @@
+# Trading Bot
+config.json
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
+build/
+dist/
+*.egg-info/
+.vscode/
+.idea/
+logs/
+scratch/
+scratch_logs/
+*.csv
+

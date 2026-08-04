@@ -1,0 +1,20 @@
+{
+    "api_key": "YOUR_TESTNET_API_KEY",
+    "api_secret": "YOUR_TESTNET_API_SECRET",
+    "use_testnet": true,
+
+    "symbol": "BTC/USDT",
+    "leverage": 5,
+
+    "grid_levels": 10,
+    "grid_spacing_usdt": 50.0,
+    "quantity_per_grid": 0.001,
+
+    "max_loss_usdt": 100.0,
+    "max_position_usdt": 500.0,
+
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+
+    "log_file": "trades.log"
+}

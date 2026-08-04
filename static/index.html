@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grid Trading Bot — Live Dashboard</title>
+    <meta name="description" content="Real-time grid trading bot dashboard for Binance Futures">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- ═══════════ TOP NAV BAR ═══════════ -->
+    <nav class="topbar">
+        <div class="topbar-left">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">GridBot</span>
+            </div>
+            <div class="nav-divider"></div>
+            <span class="nav-label">Binance Futures</span>
+            <span class="badge badge-testnet" id="modeLabel">TESTNET</span>
+        </div>
+        <div class="topbar-right">
+            <a href="/api/download_csv" target="_blank" download class="btn-download-csv" title="Download 30-Day Quantitative Performance Log (CSV)">📥 Export 30D CSV</a>
+            <div class="connection-status" id="connectionStatus">
+                <span class="status-dot disconnected"></span>
+                <span>Disconnected</span>
+            </div>
+            <div class="clock" id="clock">--:--:--</div>
+        </div>
+    </nav>
+
+    <!-- ═══════════ MAIN LAYOUT ═══════════ -->
+    <main class="dashboard">
+
+        <!-- ─── LEFT SIDEBAR: Controls ─── -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="auto-mode-section">
+                    <button id="autoModeBtn" class="auto-mode-btn" onclick="toggleAutoMode()">🤖 Auto Mode: OFF</button>
+                    <div id="autoModeStatus" class="auto-mode-status" style="display: none;">
+                        <div class="auto-status-row">
+                            <span class="auto-label">Trading:</span>
+                            <span class="auto-value" id="autoCurrentCoin">—</span>
+                        </div>
+                        <div class="auto-status-row">
+                            <span class="auto-label">Score:</span>
+                            <span class="auto-value" id="autoCurrentScore">—</span>
+                        </div>
+                        <div class="auto-status-row">
+                            <span class="auto-label">Next Rescore:</span>
+                            <span class="auto-value" id="autoNextRescore">30 min</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-header-flex">
+                    <h3 class="section-title">Trading Pair</h3>
+                    <button class="btn-ai-auto" onclick="applyAiGrid()" title="Auto-calculate optimal parameters for selected coin">⚡ AI Grid</button>
+                </div>
+                <div class="pair-selector">
+                    <input type="text" id="symbolSearch" class="number-input symbol-search-input" placeholder="🔍 Search coin (e.g. PEPE, DOGE, SOL)..." oninput="filterSymbols()">
+                    <select id="symbolSelect" class="select-input" onchange="onSymbolChange()">
+                        <option value="BTC/USDT">BTC / USDT</option>
+                        <option value="ETH/USDT">ETH / USDT</option>
+                        <option value="SOL/USDT">SOL / USDT</option>
+                        <option value="BNB/USDT">BNB / USDT</option>
+                        <option value="DOGE/USDT">DOGE / USDT (0.12)</option>
+                        <option value="XRP/USDT">XRP / USDT (0.55)</option>
+                        <option value="PEPE/USDT">PEPE / USDT (0.00001)</option>
+                        <option value="SHIB/USDT">SHIB / USDT (0.000018)</option>
+                        <option value="ADA/USDT">ADA / USDT (0.38)</option>
+                        <option value="AVAX/USDT">AVAX / USDT</option>
+                        <option value="LINK/USDT">LINK / USDT</option>
+                        <option value="SUI/USDT">SUI / USDT</option>
+                        <option value="NEAR/USDT">NEAR / USDT</option>
+                        <option value="FET/USDT">FET / USDT</option>
+                        <option value="FLOKI/USDT">FLOKI / USDT</option>
+                        <option value="WIF/USDT">WIF / USDT</option>
+                    </select>
+                </div>
+
+                <!-- ─── AI QUANT INDICATOR SUMMARY ─── -->
+                <div class="quant-card" id="quantCard" style="display: none;">
+                    <div class="quant-header">
+                        <span class="quant-title">🧠 Quant Engine Insights</span>
+                        <span class="quant-tag" id="quantRegime">Optimal Grid</span>
+                    </div>
+                    <div class="quant-grid">
+                        <div class="quant-item">
+                            <span class="quant-label">ATR Volatility</span>
+                            <span class="quant-val" id="quantAtr">--</span>
+                        </div>
+                        <div class="quant-item">
+                            <span class="quant-label">RSI (14)</span>
+                            <span class="quant-val" id="quantRsi">--</span>
+                        </div>
+                        <div class="quant-item">
+                            <span class="quant-label">Suggested Leverage</span>
+                            <span class="quant-val quant-highlight" id="quantLev">5x</span>
+                        </div>
+                        <div class="quant-item">
+                            <span class="quant-label">Quant Target (TP/SL)</span>
+                            <span class="quant-val" id="quantTpSl">-- / --</span>
+                        </div>
+                        <div class="quant-item">
+                            <span class="quant-label">Order Book Imbalance</span>
+                            <span class="quant-val" id="quantBook">--</span>
+                        </div>
+                        <div class="quant-item">
+                            <span class="quant-label">8h Funding / APR</span>
+                            <span class="quant-val" id="quantFunding">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3 class="section-title">Grid Settings</h3>
+                <div class="form-group">
+                    <label>Spacing Mode</label>
+                    <select id="spacingMode" class="select-input" onchange="toggleSpacingMode()">
+                        <option value="percent">Percentage % (Micro/All Coins)</option>
+                        <option value="usdt">Flat USDT $ (Fixed Dollar)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Grid Levels</label>
+                    <input type="number" id="gridLevels" class="number-input" value="10" min="4" max="50" step="2" oninput="updateMarginCalculator()">
+                </div>
+                <div class="form-group" id="spacingUsdtGroup" style="display: none;">
+                    <label>Spacing (USDT $)</label>
+                    <input type="number" id="gridSpacing" class="number-input" value="50" min="0.000001" step="any" oninput="updateMarginCalculator()">
+                </div>
+                <div class="form-group" id="spacingPercentGroup">
+                    <label>Spacing Step (%)</label>
+                    <input type="number" id="gridSpacingPercent" class="number-input" value="0.5" min="0.05" max="10" step="0.1" oninput="updateMarginCalculator()">
+                </div>
+                <div class="form-group">
+                    <label>Qty per Grid</label>
+                    <input type="number" id="gridQuantity" class="number-input" value="0.001" min="0.000001" step="any" oninput="updateMarginCalculator()">
+                </div>
+                <div class="form-group">
+                    <label>Leverage</label>
+                    <input type="number" id="leverage" class="number-input" value="5" min="1" max="50" oninput="updateMarginCalculator()">
+                </div>
+
+                <!-- Margin & Position Calculator -->
+                <div class="margin-calc-box" id="marginCalcBox">
+                    <div class="calc-row">
+                        <span>Total Position Value:</span>
+                        <strong id="calcTotalNotional">$0.00</strong>
+                    </div>
+                    <div class="calc-row">
+                        <span>Wallet Margin Deducted:</span>
+                        <strong id="calcRequiredMargin" class="highlight-margin">$0.00 USDT</strong>
+                    </div>
+                    <div class="calc-row">
+                        <span>Margin per Order:</span>
+                        <span id="calcMarginPerGrid">$0.00 USDT</span>
+                    </div>
+                    <div class="calc-row">
+                        <span>Est. Profit / Cycle:</span>
+                        <strong id="calcEstProfitPerCycle" style="color: #10b981;">+$0.0000 USDT (+0.00%)</strong>
+                    </div>
+                    <div class="calc-row">
+                        <span>Liquidation Safety:</span>
+                        <strong id="calcLiqBuffer" style="color: #38bdf8;">-- (Safe)</strong>
+                    </div>
+                </div>
+
+                <!-- Institutional 24h Performance & Confidence Card -->
+                <div class="quant-prediction-box" id="quantPredictionBox">
+                    <div class="prediction-header">
+                        <span class="prediction-symbol" id="predSymbol">HOME/USDT</span>
+                        <span class="prediction-confidence" id="predConfidence">Confidence: 81%</span>
+                    </div>
+                    <div class="calc-row">
+                        <span>Expected Cycles (24h):</span>
+                        <strong id="predCycles24h" style="color: #fbbf24;">28 – 36 cycles</strong>
+                    </div>
+                    <div class="calc-row">
+                        <span>Expected PnL / Cycle:</span>
+                        <strong id="predPnlCycle" style="color: #10b981;">+$0.52 USDT</strong>
+                    </div>
+                    <div class="calc-row">
+                        <span>Estimated Daily PnL:</span>
+                        <strong id="predDailyPnl" style="color: #34d399; font-size: 13px; font-weight: 700;">+$14.5 – $18.7 USDT</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3 class="section-title">Risk Controls</h3>
+                <div class="form-group">
+                    <label>Max Loss (USDT)</label>
+                    <input type="number" id="maxLoss" class="number-input" value="100" min="10" step="10">
+                </div>
+                <div class="form-group">
+                    <label>Max Position (USDT)</label>
+                    <input type="number" id="maxPosition" class="number-input" value="500" min="50" step="50">
+                </div>
+            </div>
+
+            <div class="sidebar-section button-group">
+                <button id="startBtn" class="btn btn-start" onclick="startBot()">
+                    <span class="btn-icon">▶</span> Start Bot
+                </button>
+                <button id="stopBtn" class="btn btn-stop hidden" onclick="stopBot()">
+                    <span class="btn-icon">■</span> Stop Grid Only
+                </button>
+                <button id="closePosBtn" class="btn btn-close-pos" onclick="stopAndClosePosition()">
+                    <span class="btn-icon">⚡</span> Stop & Market Close Position
+                </button>
+            </div>
+        </aside>
+
+        <!-- ─── CENTER: Main Content ─── -->
+        <section class="main-content">
+            <!-- Market Radar Widget -->
+            <div class="radar-container">
+                <div class="radar-header">
+                    <div class="radar-title">
+                        <span class="radar-icon">🔥</span>
+                        <span>Market Radar & Quant Recommendations</span>
+                    </div>
+                    <div class="radar-tabs">
+                        <button class="radar-tab active" onclick="switchRadarTab('best_grid', event)">⚡ Best Grid Coins</button>
+                        <button class="radar-tab" onclick="switchRadarTab('gainers', event)">🟢 Top Gainers</button>
+                        <button class="radar-tab" onclick="switchRadarTab('losers', event)">🔴 Top Losers</button>
+                    </div>
+                </div>
+                <div class="radar-cards" id="radarCards">
+                    <div class="radar-loading">Loading market scanner...</div>
+                </div>
+            </div>
+
+            <!-- Stats Cards Row -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-label">Current Price</div>
+                    <div class="stat-value" id="currentPrice">$0.00</div>
+                    <div class="stat-change" id="priceChange">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Realized PnL</div>
+                    <div class="stat-value" id="realizedPnl">$0.00</div>
+                    <div class="stat-sub" id="pnlCycles">0 cycles</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Unrealized PnL</div>
+                    <div class="stat-value" id="unrealizedPnl">$0.00</div>
+                    <div class="stat-sub" id="positionInfo">No position</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Balance</div>
+                    <div class="stat-value" id="balance">$0.00</div>
+                    <div class="stat-sub" id="balanceSub">USDT</div>
+                </div>
+            </div>
+
+            <!-- Price Chart -->
+            <div class="chart-container">
+                <div class="chart-header">
+                    <h3>Price & Grid Levels</h3>
+                    <div class="chart-legend">
+                        <span class="legend-item"><span class="legend-dot buy-dot"></span>Buy Levels</span>
+                        <span class="legend-item"><span class="legend-dot sell-dot"></span>Sell Levels</span>
+                        <span class="legend-item"><span class="legend-dot price-dot"></span>Price</span>
+                    </div>
+                </div>
+                <canvas id="priceChart" width="800" height="300"></canvas>
+            </div>
+
+            <!-- Grid Visualization + Order History side by side -->
+            <div class="bottom-row">
+                <!-- Grid Levels -->
+                <div class="grid-panel">
+                    <div class="panel-header">
+                        <h3>Grid Levels</h3>
+                        <span class="badge" id="orderCount">0 orders</span>
+                    </div>
+                    <div class="grid-levels" id="gridLevelsDisplay">
+                        <div class="empty-state">Start the bot to see grid levels</div>
+                    </div>
+                </div>
+
+                <!-- Trade History -->
+                <div class="history-panel">
+                    <div class="panel-header">
+                        <h3>Trade History</h3>
+                        <span class="badge" id="tradeCount">0 trades</span>
+                    </div>
+                    <div class="trade-list" id="tradeHistory">
+                        <div class="empty-state">No trades yet</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ─── RIGHT SIDEBAR: Activity Log ─── -->
+        <aside class="activity-panel">
+            <div class="panel-header">
+                <h3>Activity Log</h3>
+                <button class="btn-icon-only" onclick="clearLog()" title="Clear log">🗑️</button>
+            </div>
+            <div class="log-list" id="activityLog">
+                <div class="log-entry log-system">
+                    <span class="log-time">--:--:--</span>
+                    <span class="log-msg">Dashboard loaded. Configure settings and press Start.</span>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- ═══════════ SCRIPTS ═══════════ -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
