@@ -47,6 +47,8 @@ _cached_symbols = None
 _cached_scanner_data = None
 _last_scanner_time = 0
 auto_manager = None  # Auto Portfolio Manager instance
+shared_grid_engine = None
+shared_risk_manager = None
 
 def get_shared_client():
     """Reusable Binance client instance to avoid repeated connection latency."""
@@ -253,18 +255,30 @@ def api_download_csv():
 # ═══════════ Socket.IO Events ═══════════
 @socketio.on('connect')
 def handle_connect():
-    """Client connected to dashboard."""
+    """Client connected to dashboard. Sync state if bot is currently running in background."""
     print(f"  ✅ Dashboard client connected")
     emit('log_message', {'level': 'system', 'message': 'Dashboard connected to server'})
-    try:
-        client = get_shared_client()
-        if client:
-            bal = client.get_wallet_balance()
-            emit('stats_update', {'balance': float(bal), 'realized_pnl': 0.0, 'cycles': 0})
-    except Exception:
-        pass
 
-    if not bot_running:
+    # Sync Auto Mode state
+    if auto_manager:
+        emit('auto_mode_update', auto_manager.get_status())
+    else:
+        emit('auto_mode_update', {'active': False})
+
+    # Sync bot running state & grid levels
+    global shared_grid_engine, shared_risk_manager, _cached_client
+    if bot_running and bot_thread is not None and bot_thread.is_alive():
+        symbol = current_config.get('symbol', 'SOL/USDT')
+        emit('bot_started', {'symbol': symbol})
+        if shared_grid_engine:
+            send_grid_update(shared_grid_engine)
+            client = _cached_client or get_shared_client()
+            if client and shared_risk_manager:
+                try:
+                    send_stats_update(shared_grid_engine, client, shared_risk_manager)
+                except Exception:
+                    pass
+    else:
         emit('bot_stopped', {'pnl': 0, 'cycles': 0})
 
 
@@ -439,7 +453,10 @@ def run_bot(config):
         risk_manager.max_position_usdt = smart_max_pos
         logger.system(f"Max position limit: ${smart_max_pos:,.2f}")
 
+        global shared_grid_engine, shared_risk_manager
         grid_engine = GridEngine(config, client, risk_manager, logger)
+        shared_grid_engine = grid_engine
+        shared_risk_manager = risk_manager
         logger.system("Setting up grid...")
         grid_engine.initialize()
 
@@ -648,6 +665,8 @@ def run_bot(config):
             pass
 
         # Cleanup
+        global shared_grid_engine
+        shared_grid_engine = None
         bot_running = False
         try:
             grid_engine.cancel_all()
