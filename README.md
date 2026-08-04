@@ -286,9 +286,10 @@ nano config.json
 ```
 *(Fill in your `api_key`, `api_secret`, `use_testnet: false` for Live trading, and optional Telegram tokens. Press `Ctrl + O` to save, `Ctrl + X` to exit).*
 
-### Step 5: Open Firewall Port 5000 (For Remote Web Dashboard Access)
+### Step 5: Open Firewall Ports 22 & 5000 (Prevents SSH Lockout)
 ```bash
-# Allow port 5000 through UFW firewall
+# IMPORTANT: Always allow SSH port 22 BEFORE enabling UFW!
+sudo ufw allow 22/tcp
 sudo ufw allow 5000/tcp
 sudo ufw enable
 ```
