@@ -269,8 +269,14 @@ def handle_connect():
     global shared_grid_engine, shared_risk_manager, _cached_client
     if bot_running and bot_thread is not None and bot_thread.is_alive():
         symbol = current_config.get('symbol', 'SOL/USDT')
-        emit('bot_started', {'symbol': symbol})
+        is_testnet = bool(current_config.get('use_testnet', False) or current_config.get('use_demo', False))
+        emit('bot_started', {
+            'symbol': symbol,
+            'use_testnet': is_testnet
+        })
         if shared_grid_engine:
+            if shared_grid_engine.current_price:
+                emit('price_update', {'price': shared_grid_engine.current_price})
             send_grid_update(shared_grid_engine)
             client = _cached_client or get_shared_client()
             if client and shared_risk_manager:

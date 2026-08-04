@@ -372,7 +372,21 @@ function handleBotStarted(data) {
     document.getElementById('startBtn').classList.add('hidden');
     document.getElementById('stopBtn').classList.remove('hidden');
     setControlsEnabled(false);
-    addLog('info', `Bot started: ${data.symbol || 'unknown'}`);
+    
+    if (data.symbol) {
+        addLog('info', `Bot started: ${data.symbol}`);
+        const select = document.getElementById('symbolSelect');
+        if (select) {
+            // Add symbol if not present in dropdown list
+            if (!Array.from(select.options).some(opt => opt.value === data.symbol)) {
+                const opt = document.createElement('option');
+                opt.value = data.symbol;
+                opt.textContent = data.symbol;
+                select.appendChild(opt);
+            }
+            select.value = data.symbol;
+        }
+    }
     
     const modeLabel = document.getElementById('modeLabel');
     if (modeLabel) {
@@ -385,14 +399,9 @@ function handleBotStarted(data) {
         }
     }
 
-    // Clear previous session data & seed with current price
-    priceHistory = lastKnownPrice ? [lastKnownPrice, lastKnownPrice] : [];
-    trades = [];
-    gridLevels = [];
-    renderGridLevels();
-    renderTrades();
-    document.getElementById('orderCount').textContent = '0 orders';
-    document.getElementById('tradeCount').textContent = '0 trades';
+    // Reset price history cleanly for current symbol to avoid chart spikes
+    priceHistory = [];
+    lastKnownPrice = null;
     drawChart();
 }
 
