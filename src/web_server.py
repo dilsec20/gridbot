@@ -417,7 +417,7 @@ def handle_get_auto_status():
 # ═══════════ Bot Runner (Background Thread) ═══════════
 def run_bot(config):
     """Run the trading bot in a background thread, emitting events to the dashboard."""
-    global bot_running
+    global bot_running, shared_grid_engine, shared_risk_manager
 
     # Create a dashboard-aware logger that sends logs to the browser
     logger = DashboardLogger(config.get('log_file', 'trades.log'))
@@ -453,7 +453,6 @@ def run_bot(config):
         risk_manager.max_position_usdt = smart_max_pos
         logger.system(f"Max position limit: ${smart_max_pos:,.2f}")
 
-        global shared_grid_engine, shared_risk_manager
         grid_engine = GridEngine(config, client, risk_manager, logger)
         shared_grid_engine = grid_engine
         shared_risk_manager = risk_manager
@@ -665,7 +664,6 @@ def run_bot(config):
             pass
 
         # Cleanup
-        global shared_grid_engine
         shared_grid_engine = None
         bot_running = False
         try:
