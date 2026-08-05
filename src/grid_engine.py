@@ -213,16 +213,26 @@ class GridEngine:
         self.grid_low = round(self.current_price - (half_levels * self.grid_spacing), self.tick_size)
         self.grid_high = round(self.current_price + (half_levels * self.grid_spacing), self.tick_size)
 
-        # Check if live exchange orders exist on Binance to rebuild state
+        # Check if live exchange orders exist on Binance to rebuild state & auto-detect active trade coin
         try:
             open_orders = self.client.get_open_orders()
-            matching_orders = [o for o in open_orders if o.get("symbol") == self.symbol or not o.get("symbol")]
-            if matching_orders and len(matching_orders) >= 2:
-                self.logger.grid(f"🔄 Rebuilding Deque state from {len(matching_orders)} live exchange orders...")
-                self._rebuild_from_exchange_orders(matching_orders)
-                self.is_running = True
-                self._save_state()
-                return
+            if open_orders:
+                matching_orders = [o for o in open_orders if o.get("symbol") == self.symbol]
+                if not matching_orders:
+                    detected_symbol = open_orders[0].get("symbol")
+                    if detected_symbol:
+                        self.logger.system(f"🔍 Auto-detected active trade coin on Binance: {detected_symbol}! Auto-switching symbol: {self.symbol} → {detected_symbol}")
+                        self.symbol = detected_symbol
+                        self.config["symbol"] = detected_symbol
+                        self.client.symbol = detected_symbol
+                        matching_orders = open_orders
+
+                if matching_orders:
+                    self.logger.grid(f"🔄 Rebuilding Deque state from {len(matching_orders)} live exchange orders for {self.symbol}...")
+                    self._rebuild_from_exchange_orders(matching_orders)
+                    self.is_running = True
+                    self._save_state()
+                    return
         except Exception as e:
             self.logger.error(f"Error checking live exchange orders for rebuild: {e}")
 
