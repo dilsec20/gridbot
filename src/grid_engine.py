@@ -325,9 +325,21 @@ class GridEngine:
             self.logger.warn(f"Risk manager blocked replacement order at ${new_price:,.2f}")
 
     def _check_auto_trailing_recenter(self):
-        """Auto-recenter grid levels if market price moves out of active grid bounds."""
+        """Auto-recenter grid levels if market price moves out of active grid bounds.
+        IMPORTANT: Only recenter if open position is zero (or negligible) so we never
+        cancel active take-profit exit orders or realize a loss on open contracts!
+        """
         if not self.is_running or self.current_price <= 0:
             return
+
+        # Do NOT auto-recenter while holding an active open position — let take-profit orders close at profit first!
+        try:
+            pos = self.client.get_position()
+            pos_amount = abs(float(pos.get("amount", 0.0)))
+            if pos_amount > 0.01:
+                return
+        except Exception:
+            pass
 
         active_prices = [
             l.price for l in self._order_to_level.values()
