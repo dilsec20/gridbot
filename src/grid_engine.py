@@ -280,6 +280,14 @@ class GridEngine:
                 f"Grid cycle #{self.completed_cycles} completed! "
                 f"PnL: ${pnl:+.4f} | Total: ${self.risk_manager.get_realized_pnl():+.4f}"
             )
+            if hasattr(self.risk_manager, 'perf_tracker') and self.risk_manager.perf_tracker:
+                try:
+                    bal = self.client.get_wallet_balance()
+                except Exception:
+                    bal = 0
+                self.risk_manager.perf_tracker.record_cycle_complete(
+                    self.completed_cycles, pnl, self.risk_manager.get_realized_pnl(), bal
+                )
 
             # Auto-Compound Profits: Reinvest profits to boost quantity every 5 cycles
             if self.completed_cycles % 5 == 0 and self.current_price > 0:

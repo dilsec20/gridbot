@@ -244,11 +244,29 @@ def api_performance():
 
 @app.route('/api/download_csv')
 def api_download_csv():
-    """Download the 30-day quantitative performance CSV log file."""
-    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "performance_30d.csv")
+    """Download clean quantitative performance CSV reports (Daily Summary, Cycle Logs, or Hourly)."""
+    from flask import request, send_file
+    csv_type = request.args.get('type', 'daily').lower()
+    
+    logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+    
+    if csv_type == 'cycles':
+        filename = "completed_cycles.csv"
+    elif csv_type == 'hourly':
+        filename = "performance_summary.csv"
+    else:
+        filename = "daily_performance.csv"
+        
+    csv_path = os.path.join(logs_dir, filename)
     if os.path.exists(csv_path):
-        from flask import send_file
-        return send_file(csv_path, as_attachment=True, download_name="performance_30d.csv", mimetype="text/csv")
+        return send_file(csv_path, as_attachment=True, download_name=filename, mimetype="text/csv")
+        
+    # Fallback to any existing CSV in logs
+    for fallback_name in ["daily_performance.csv", "completed_cycles.csv", "performance_summary.csv", "performance_30d.csv"]:
+        fb_path = os.path.join(logs_dir, fallback_name)
+        if os.path.exists(fb_path):
+            return send_file(fb_path, as_attachment=True, download_name=fallback_name, mimetype="text/csv")
+            
     return {'error': 'CSV log file not found yet. Start the bot to generate performance logs!'}, 404
 
 
@@ -480,6 +498,7 @@ def run_bot(config):
         global perf_tracker
         perf_tracker = PerformanceTracker(config, client, logger)
         perf_tracker.initialize(client.get_wallet_balance())
+        risk_manager.perf_tracker = perf_tracker
 
         # ─── Initialize Real-Time WebSocket Client (<50ms) ───
         ws_client = BinanceWSClient(config, client, logger, perf_tracker=perf_tracker)
