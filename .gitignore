@@ -14,4 +14,5 @@ logs/
 scratch/
 scratch_logs/
 *.csv
+data/state.json
 
