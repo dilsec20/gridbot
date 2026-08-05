@@ -13,7 +13,7 @@ from enum import Enum
 from collections import deque
 from typing import Optional
 
-from logger import BotLogger
+from logger import BotLogger, fmt_price
 from binance_client import BinanceClient
 from risk_manager import RiskManager
 
@@ -391,7 +391,7 @@ class GridEngine:
 
         level = self._order_to_level.get(order_id)
         if level and level.status == GridOrderStatus.ACTIVE:
-            self.logger.grid(f"⚡ INSTANT WS FILL DETECTED: Order #{order_id} ({fill_side.upper()} @ ${fill_price:,.2f})")
+            self.logger.grid(f"⚡ INSTANT WS FILL DETECTED: Order #{order_id} ({fill_side.upper()} @ {fmt_price(fill_price)})")
             self._handle_fill(level)
 
     def _handle_fill(self, filled_level: GridLevel):
@@ -450,7 +450,7 @@ class GridEngine:
             self._save_state()
         else:
             self.logger.grid(
-                f"Initial {filled_level.side.value.upper()} filled at ${filled_level.price:,.4f} — "
+                f"Initial {filled_level.side.value.upper()} filled at {fmt_price(filled_level.price)} — "
                 f"waiting for opposite fill to complete cycle..."
             )
 

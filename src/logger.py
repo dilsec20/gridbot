@@ -21,6 +21,24 @@ if sys.platform == 'win32':
         pass
 
 
+def fmt_price(price: float) -> str:
+    """Format price dynamically with high precision for micro coins."""
+    try:
+        p = float(price or 0)
+        if p == 0:
+            return "$0.00"
+        elif abs(p) < 0.001:
+            return f"${p:,.6f}"
+        elif abs(p) < 1:
+            return f"${p:,.5f}"
+        elif abs(p) < 100:
+            return f"${p:,.4f}"
+        else:
+            return f"${p:,.2f}"
+    except Exception:
+        return f"${price}"
+
+
 class BotLogger:
     """Color-coded logger with console + file output and trade history."""
 
@@ -93,8 +111,9 @@ class BotLogger:
     def trade(self, side: str, price: float, qty: float, pnl: float = None):
         """Log a trade execution."""
         self.trade_count += 1
-        pnl_str = f" | PnL: ${pnl:+.2f}" if pnl is not None else ""
-        msg = f"{side.upper()} {qty} @ ${price:,.2f}{pnl_str}"
+        pnl_str = f" | PnL: ${pnl:+.4f}" if pnl is not None else ""
+        price_str = fmt_price(price)
+        msg = f"{side.upper()} {qty} @ {price_str}{pnl_str}"
         self._log("TRADE", msg)
 
     def grid(self, message: str):

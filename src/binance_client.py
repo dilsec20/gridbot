@@ -5,7 +5,7 @@ Handles connection, authentication, and all API operations.
 
 import time
 import ccxt
-from logger import BotLogger
+from logger import BotLogger, fmt_price
 
 
 class BinanceClient:
@@ -253,7 +253,7 @@ class BinanceClient:
                 return order
 
             except ccxt.InvalidOrder as e:
-                self.logger.error(f"Invalid order {side} {quantity} @ ${price:,.2f}: {e}")
+                self.logger.error(f"Invalid order {side} {quantity} @ {fmt_price(price)}: {e}")
                 return None
 
             except (ccxt.NetworkError, ccxt.ExchangeNotAvailable) as e:

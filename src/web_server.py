@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, send_from_directory
 from flask_socketio import SocketIO, emit
 
-from logger import BotLogger
+from logger import BotLogger, fmt_price
 from binance_client import BinanceClient
 from risk_manager import RiskManager
 from grid_engine import GridEngine
@@ -789,7 +789,7 @@ def send_stats_update(grid_engine, client, risk_manager):
 
     pos_info = "No position"
     if position['size'] != 0:
-        pos_info = f"{position['side'].upper()} {abs(position['size'])} @ ${position['entry_price']:,.2f}"
+        pos_info = f"{position['side'].upper()} {abs(position['size'])} @ {fmt_price(position['entry_price'])}"
 
     socketio.emit('stats_update', {
         'realized_pnl': exchange_realized_pnl,
