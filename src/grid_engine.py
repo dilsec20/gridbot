@@ -353,7 +353,6 @@ class GridEngine:
                 if can_place:
                     self.logger.grid(f"⚡ Dynamic Grid Expansion: Appending 1 new BUY level @ ${new_price:,.2f}")
                     order = self.client.place_limit_order(
-                        symbol=self.symbol,
                         side="BUY",
                         quantity=self.quantity_per_grid,
                         price=new_price
@@ -378,7 +377,6 @@ class GridEngine:
             if can_place:
                 self.logger.grid(f"⚡ Dynamic Grid Expansion: Appending 1 new SELL level @ ${new_price:,.2f}")
                 order = self.client.place_limit_order(
-                    symbol=self.symbol,
                     side="SELL",
                     quantity=self.quantity_per_grid,
                     price=new_price
