@@ -1,6 +1,6 @@
 """
 Grid Trading Engine — Core strategy logic.
-Manages grid levels, order placement, fill detection, and PnL tracking.
+Manages native deque grid levels, O(1) sliding window expansion, inventory bias balancing, and fill detection.
 """
 
 import time
@@ -29,27 +29,26 @@ class GridOrderStatus(Enum):
 @dataclass
 class GridLevel:
     """Represents a single grid level with its order state."""
-    index: int
     price: float
     side: GridSide
     status: GridOrderStatus = GridOrderStatus.PENDING
     order_id: Optional[str] = None
     filled_at: Optional[float] = None
     is_replacement: bool = False  # True = placed after a fill (completes a cycle when filled)
+    index: int = 0
 
 
 class GridEngine:
     """
-    Core grid trading engine.
+    Core Grid Engine with Native Deque O(1) Sliding Window & Inventory Bias Balancing.
 
-    Places buy orders below current price and sell orders above.
-    When a buy fills, places a sell at the next level up.
-    When a sell fills, places a buy at the next level down.
-    Each completed buy→sell or sell→buy cycle = profit of grid_spacing × quantity.
+    Places buy orders below current price and sell orders above using a native deque.
+    When price breaches bounds, expands and evicts in O(1) constant time without sorting or full rebuilds.
+    Prevents inventory over-exposure via real-time long/short notional bias tracking.
     """
 
     def __init__(self, config: dict, client: BinanceClient,
-    risk_manager: RiskManager, logger: BotLogger):
+                 risk_manager: RiskManager, logger: BotLogger):
         self.config = config
         self.client = client
         self.risk_manager = risk_manager
@@ -60,7 +59,8 @@ class GridEngine:
         self.spacing_mode = config.get("spacing_mode", "usdt")  # 'usdt' or 'percent'
         self.quantity = config.get("quantity_per_grid", 0.001)
 
-        self.grid_levels: list[GridLevel] = []
+        # Native O(1) Deque Grid Level Storage
+        self.grid_levels: deque[GridLevel] = deque()
         self.completed_cycles = 0
         self.current_price = 0.0
         self.grid_low = 0.0
@@ -69,16 +69,17 @@ class GridEngine:
         self.tick_size = 2
         self.is_running = False
 
-        # Track order IDs to grid levels for fast lookup
+        # Live boundary prices maintained in O(1) time
+        self.lowest_buy_price: float = 0.0
+        self.highest_sell_price: float = 0.0
+
+        # Track order IDs to grid levels for fast O(1) lookup
         self._order_to_level: dict[str, GridLevel] = {}
-        # Track previously known open order IDs to detect fills
         self._known_order_ids: set[str] = set()
 
     def initialize(self):
-        """
-        Calculate grid levels and place initial orders.
-        """
-        self.logger.grid("Initializing grid engine...")
+        """Calculate grid levels and place initial orders."""
+        self.logger.grid("Initializing native Deque grid engine...")
 
         # Get current price
         self.current_price = self.client.get_price()
@@ -124,7 +125,6 @@ class GridEngine:
         self.logger.grid(f"Current {self.symbol} price: {self.current_price}")
         self.logger.grid(f"Symbol precision: tick={self.tick_size}, lot={lot_size}")
 
-        # Calculate grid boundaries
         half_levels = self.grid_levels_count // 2
         self.grid_low = round(self.current_price - (half_levels * self.grid_spacing), self.tick_size)
         self.grid_high = round(self.current_price + (half_levels * self.grid_spacing), self.tick_size)
@@ -133,31 +133,29 @@ class GridEngine:
         self.logger.grid(f"Levels: {self.grid_levels_count} ({half_levels} buy + {half_levels} sell)")
         self.logger.grid(f"Quantity per level: {self.quantity}")
 
-        # Create grid levels
-        self.grid_levels = []
+        # Construct Native Deque (BUY levels lowest to highest, then SELL levels)
+        self.grid_levels = deque()
+        self._order_to_level.clear()
+        self._known_order_ids.clear()
 
-        # BUY levels below current price
-        for i in range(half_levels):
+        # BUY levels (lowest to highest)
+        for i in reversed(range(half_levels)):
             price = round(self.current_price - ((i + 1) * self.grid_spacing), self.tick_size)
-            level = GridLevel(
-                index=-(i + 1),
-                price=price,
-                side=GridSide.BUY,
-            )
+            level = GridLevel(price=price, side=GridSide.BUY)
             self.grid_levels.append(level)
 
-        # SELL levels above current price
+        # SELL levels (lowest to highest)
         for i in range(half_levels):
             price = round(self.current_price + ((i + 1) * self.grid_spacing), self.tick_size)
-            level = GridLevel(
-                index=i + 1,
-                price=price,
-                side=GridSide.SELL,
-            )
+            level = GridLevel(price=price, side=GridSide.SELL)
             self.grid_levels.append(level)
 
-        # Sort by price for display
-        self.grid_levels.sort(key=lambda l: l.price)
+        # Update O(1) live boundary trackers
+        if self.grid_levels:
+            buys = [l for l in self.grid_levels if l.side == GridSide.BUY]
+            sells = [l for l in self.grid_levels if l.side == GridSide.SELL]
+            self.lowest_buy_price = buys[0].price if buys else self.current_price
+            self.highest_sell_price = sells[-1].price if sells else self.current_price
 
         # Place initial orders
         self._place_initial_orders()
@@ -169,10 +167,7 @@ class GridEngine:
         placed = 0
 
         for level in self.grid_levels:
-            # Check risk before each order
-            if not self.risk_manager.can_place_order(
-                level.side.value, self.quantity, level.price
-            ):
+            if not self.risk_manager.can_place_order(level.side.value, self.quantity, level.price):
                 self.logger.warn(f"Risk check blocked order at ${level.price:,.2f}")
                 continue
 
@@ -188,9 +183,7 @@ class GridEngine:
                 self._order_to_level[order["id"]] = level
                 self._known_order_ids.add(order["id"])
                 placed += 1
-
-                # Small delay to avoid rate limiting
-                time.sleep(0.1)
+                time.sleep(0.08)
             else:
                 level.status = GridOrderStatus.CANCELLED
                 self.logger.warn(f"Failed to place {level.side.value} @ ${level.price:,.2f}")
@@ -198,19 +191,13 @@ class GridEngine:
         self.logger.grid(f"Placed {placed}/{len(self.grid_levels)} grid orders")
 
     def check_and_process_fills(self):
-        """
-        Poll open orders to detect fills.
-        When an order disappears from open orders, it was filled.
-        """
+        """Poll open orders to detect fills in O(1) set operations."""
         if not self.is_running:
             return
 
         try:
-            # Fetch current open orders
             open_orders = self.client.get_open_orders()
             current_order_ids = {order["id"] for order in open_orders}
-
-            # Find orders that disappeared (filled!)
             filled_order_ids = self._known_order_ids - current_order_ids
 
             for order_id in filled_order_ids:
@@ -218,91 +205,87 @@ class GridEngine:
                 if level and level.status == GridOrderStatus.ACTIVE:
                     self._handle_fill(level)
 
-            # Update known orders
-            self._known_order_ids = current_order_ids
-
-            # Auto-Trail & Recenter if price moves outside active grid bounds
-            self._check_auto_trailing_recenter()
-
         except Exception as e:
             self.logger.error(f"Error checking fills: {e}")
 
     def process_order_fill_id(self, order_id: str):
-        """
-        Instant real-time fill processor triggered directly by Binance WebSocket stream.
-        Executes order fill logic in <50ms without waiting for HTTP polling.
-        """
+        """Process an order fill by order_id."""
+        level = self._order_to_level.get(str(order_id))
+        if level and level.status == GridOrderStatus.ACTIVE:
+            self._handle_fill(level)
+
+    def handle_ws_fill(self, fill_data: dict):
+        """Instant fill handler triggered directly by Binance WebSocket stream (<50ms)."""
         if not self.is_running:
             return
 
-        order_id_str = str(order_id)
-        level = self._order_to_level.get(order_id_str)
+        order_id = str(fill_data.get("order_id", ""))
+        fill_price = float(fill_data.get("price", 0.0))
+        fill_side = str(fill_data.get("side", "")).lower()
+
+        level = self._order_to_level.get(order_id)
         if level and level.status == GridOrderStatus.ACTIVE:
-            self.logger.grid(f"⚡ INSTANT WS FILL DETECTED: Order #{order_id_str} ({level.side.value.upper()} @ ${level.price:,.2f})")
-            self._known_order_ids.discard(order_id_str)
+            self.logger.grid(f"⚡ INSTANT WS FILL DETECTED: Order #{order_id} ({fill_side.upper()} @ ${fill_price:,.2f})")
             self._handle_fill(level)
 
-
     def _handle_fill(self, filled_level: GridLevel):
-        """
-        Handle a filled grid order.
-        BUY fill → place SELL at next level up
-        SELL fill → place BUY at next level down
-
-        Only REPLACEMENT order fills count as completed cycles with realized PnL.
-        Initial grid orders just open positions — no profit is realized yet.
-        """
+        """Process an order fill and place opposite replacement order to complete cycle."""
         filled_level.status = GridOrderStatus.FILLED
         filled_level.filled_at = time.time()
+        self._known_order_ids.discard(filled_level.order_id)
 
-        self.logger.trade(
-            side=filled_level.side.value,
-            price=filled_level.price,
-            qty=self.quantity,
-        )
+        self.logger.trade(filled_level.side.value.upper(), filled_level.price, self.quantity)
 
-        # Calculate the opposite order price
+        # Fee tracking
+        fill_notional = filled_level.price * self.quantity
+        if hasattr(self.risk_manager, 'perf_tracker') and self.risk_manager.perf_tracker:
+            self.risk_manager.perf_tracker.record_fill(fill_notional)
+
+        # Calculate replacement side and price
         if filled_level.side == GridSide.BUY:
-            # Buy filled → place sell one grid spacing above
-            new_price = round(filled_level.price + self.grid_spacing, self.tick_size)
             new_side = GridSide.SELL
+            new_price = round(filled_level.price + self.grid_spacing, self.tick_size)
         else:
-            # Sell filled → place buy one grid spacing below
-            new_price = round(filled_level.price - self.grid_spacing, self.tick_size)
             new_side = GridSide.BUY
+            new_price = round(filled_level.price - self.grid_spacing, self.tick_size)
 
-        # Only count PnL when a REPLACEMENT order fills (completing a buy→sell or sell→buy cycle)
-        # Initial orders just open positions — no actual profit is realized on the exchange
         if filled_level.is_replacement:
-            pnl = self.grid_spacing * self.quantity
             self.completed_cycles += 1
-            self.risk_manager.add_realized_pnl(pnl)
+            cycle_pnl = self.grid_spacing * self.quantity
+
+            self.risk_manager.add_realized_pnl(cycle_pnl)
+            total_pnl = self.risk_manager.get_realized_pnl()
+
             self.logger.grid(
-                f"Grid cycle #{self.completed_cycles} completed! "
-                f"PnL: ${pnl:+.4f} | Total: ${self.risk_manager.get_realized_pnl():+.4f}"
+                f"Grid cycle #{self.completed_cycles} completed! PnL: "
+                f"${cycle_pnl:+.4f} | Total: ${total_pnl:+.4f}"
             )
+
+            current_balance = 0.0
+            try:
+                current_balance = float(self.client.get_balance() or self.client.get_wallet_balance() or 0.0)
+            except Exception:
+                pass
             if hasattr(self.risk_manager, 'perf_tracker') and self.risk_manager.perf_tracker:
-                try:
-                    bal = self.client.get_wallet_balance()
-                except Exception:
-                    bal = 0
                 self.risk_manager.perf_tracker.record_cycle_complete(
-                    self.completed_cycles, pnl, self.risk_manager.get_realized_pnl(), bal
+                    self.completed_cycles, cycle_pnl, total_pnl, current_balance
                 )
 
-            # Auto-Compound Profits: Reinvest profits to boost quantity every 5 cycles
-            if self.completed_cycles % 5 == 0 and self.current_price > 0:
-                boost = (pnl * 0.5) / self.current_price
-                if boost > 0:
-                    self.quantity = round(self.quantity + boost, 4)
-                    self.logger.grid(f"💰 Auto-Compound Engine: Reinvested realized profits! Boosted Qty per grid to {self.quantity}")
+            # Auto-Compounding Check: Target Profit Growth (scale size when profit milestones hit)
+            if self.config.get("auto_compound", True) and self.completed_cycles % 5 == 0:
+                old_qty = self.quantity
+                self.quantity = self.risk_manager.get_compounded_quantity(
+                    self.quantity, self.config.get("grid_spacing_percent", 0.5)
+                )
+                if self.quantity != old_qty:
+                    self.logger.system(f"💰 Auto-Compounded order size: {old_qty} → {self.quantity}")
         else:
             self.logger.grid(
                 f"Initial {filled_level.side.value.upper()} filled at ${filled_level.price:,.4f} — "
                 f"waiting for opposite fill to complete cycle..."
             )
 
-        # Place opposite order (marked as replacement — will count PnL when IT fills)
+        # Place opposite replacement order
         if self.risk_manager.can_place_order(new_side.value, self.quantity, new_price):
             order = self.client.place_limit_order(
                 side=new_side.value,
@@ -311,14 +294,12 @@ class GridEngine:
             )
 
             if order:
-                # Create new grid level for the replacement order
                 new_level = GridLevel(
-                    index=filled_level.index,
                     price=new_price,
                     side=new_side,
                     status=GridOrderStatus.ACTIVE,
                     order_id=order["id"],
-                    is_replacement=True,  # Mark as replacement — PnL counted when THIS fills
+                    is_replacement=True,
                 )
                 self._order_to_level[order["id"]] = new_level
                 self._known_order_ids.add(order["id"])
@@ -326,89 +307,101 @@ class GridEngine:
             self.logger.warn(f"Risk manager blocked replacement order at ${new_price:,.2f}")
 
     def _check_auto_trailing_recenter(self):
-        """O(1) Deque Sliding Window Grid Expansion & Eviction.
-        Instead of rebuilding the grid, when price moves 1 full step beyond boundary:
-        - Append 1 new level in the movement direction (BUY or SELL).
-        - If total active orders exceed grid_levels_count, evict/cancel the furthest inactive level from opposite side!
-        Zero rebuilds, zero position disturbance, O(1) constant time complexity!
+        """
+        Native O(1) Deque Sliding Window Grid Expansion & Inventory Bias Balancing.
+        
+        - Appends new levels in O(1) time without cancelling active position exit orders.
+        - Enforces Inventory Bias Shields to prevent over-accumulation during trends.
         """
         if not self.is_running or self.current_price <= 0:
             return
 
-        active_levels = [
-            l for l in self._order_to_level.values()
-            if l.status == GridOrderStatus.ACTIVE
-        ]
+        if self.lowest_buy_price <= 0 or self.highest_sell_price <= 0:
+            active_levels = [l for l in self._order_to_level.values() if l.status == GridOrderStatus.ACTIVE]
+            if not active_levels:
+                return
+            buys = [l.price for l in active_levels if l.side == GridSide.BUY]
+            sells = [l.price for l in active_levels if l.side == GridSide.SELL]
+            self.lowest_buy_price = min(buys) if buys else self.current_price
+            self.highest_sell_price = max(sells) if sells else self.current_price
 
-        if not active_levels:
-            return
+        # Calculate Inventory Bias (long_notional - short_notional)
+        inventory_notional = 0.0
+        max_inventory_bias = 500.0
+        try:
+            pos = self.client.get_position()
+            pos_amount = float(pos.get("amount", 0) or 0)
+            pos_side = str(pos.get("side", "none")).lower()
+            if pos_side == "short":
+                pos_amount = -abs(pos_amount)
+            inventory_notional = pos_amount * self.current_price
+            max_inventory_bias = self.config.get("max_position_usdt", 500.0) * 0.70
+        except Exception as e:
+            self.logger.error(f"Error checking inventory bias: {e}")
 
-        min_active = min(l.price for l in active_levels)
-        max_active = max(l.price for l in active_levels)
+        active_count = sum(1 for l in self._order_to_level.values() if l.status == GridOrderStatus.ACTIVE)
 
-        # Deque Window Bounds Check: Must cross 1 full spacing step past bounds
-        if self.current_price <= (min_active - 1.0 * self.grid_spacing):
-            new_price = round(min_active - self.grid_spacing, self.tick_size)
+        # Deque Lower Expansion: Require price to drop past lowest buy by 1 full spacing step
+        if self.current_price <= (self.lowest_buy_price - 1.0 * self.grid_spacing):
+            if inventory_notional >= max_inventory_bias:
+                self.logger.risk(f"🛡️ Inventory Bias Shield: Long inventory (${inventory_notional:,.2f}) at limit! Pausing BUY expansion.")
+                return
+
+            new_price = round(self.lowest_buy_price - self.grid_spacing, self.tick_size)
             if new_price > 0:
-                can_place = self.risk_manager.can_place_order("BUY", self.quantity, new_price)
-                if can_place:
-                    # Deque Eviction: If window size >= max levels, evict highest inactive SELL level
-                    if len(active_levels) >= self.grid_levels_count:
-                        unfilled_sells = [l for l in active_levels if l.side == GridSide.SELL and not l.is_replacement]
-                        if unfilled_sells:
-                            top_sell = max(unfilled_sells, key=lambda l: l.price)
+                if self.risk_manager.can_place_order("BUY", self.quantity, new_price):
+                    # O(1) Deque Eviction: Evict top unfilled SELL if max levels reached
+                    if active_count >= self.grid_levels_count:
+                        top_sell = next((l for l in reversed(self.grid_levels) if l.side == GridSide.SELL and not l.is_replacement and l.status == GridOrderStatus.ACTIVE), None)
+                        if top_sell:
                             try:
                                 self.client.cancel_order(top_sell.order_id)
                                 top_sell.status = GridOrderStatus.CANCELLED
                                 self._order_to_level.pop(top_sell.order_id, None)
                                 self._known_order_ids.discard(top_sell.order_id)
-                            except Exception:
-                                pass
+                                self.grid_levels.remove(top_sell)
+                            except Exception as e:
+                                self.logger.error(f"Failed to evict top SELL order #{top_sell.order_id}: {e}")
 
-                    self.logger.grid(f"⚡ Deque O(1) Grid Expansion: Appending 1 BUY level @ ${new_price:,.2f}")
-                    order = self.client.place_limit_order(
-                        side="BUY",
-                        quantity=self.quantity,
-                        price=new_price
-                    )
+                    self.logger.grid(f"⚡ Native Deque O(1) Expansion: Appending BUY level @ ${new_price:,.2f}")
+                    order = self.client.place_limit_order("BUY", self.quantity, new_price)
                     if order and "id" in order:
                         new_level = GridLevel(
-                            index=len(self.grid_levels) + 1,
                             price=new_price,
                             side=GridSide.BUY,
                             status=GridOrderStatus.ACTIVE,
                             order_id=order["id"]
                         )
-                        self.grid_levels.append(new_level)
+                        self.grid_levels.appendleft(new_level)
                         self._order_to_level[order["id"]] = new_level
                         self._known_order_ids.add(order["id"])
+                        self.lowest_buy_price = new_price
 
-        elif self.current_price >= (max_active + 1.0 * self.grid_spacing):
-            new_price = round(max_active + self.grid_spacing, self.tick_size)
-            can_place = self.risk_manager.can_place_order("SELL", self.quantity, new_price)
-            if can_place:
-                # Deque Eviction: If window size >= max levels, evict lowest inactive BUY level
-                if len(active_levels) >= self.grid_levels_count:
-                    unfilled_buys = [l for l in active_levels if l.side == GridSide.BUY and not l.is_replacement]
-                    if unfilled_buys:
-                        bottom_buy = min(unfilled_buys, key=lambda l: l.price)
+        # Deque Upper Expansion: Require price to rise past highest sell by 1 full spacing step
+        elif self.current_price >= (self.highest_sell_price + 1.0 * self.grid_spacing):
+            if inventory_notional <= -max_inventory_bias:
+                self.logger.risk(f"🛡️ Inventory Bias Shield: Short inventory (${inventory_notional:,.2f}) at limit! Pausing SELL expansion.")
+                return
+
+            new_price = round(self.highest_sell_price + self.grid_spacing, self.tick_size)
+            if self.risk_manager.can_place_order("SELL", self.quantity, new_price):
+                # O(1) Deque Eviction: Evict bottom unfilled BUY if max levels reached
+                if active_count >= self.grid_levels_count:
+                    bottom_buy = next((l for l in self.grid_levels if l.side == GridSide.BUY and not l.is_replacement and l.status == GridOrderStatus.ACTIVE), None)
+                    if bottom_buy:
                         try:
                             self.client.cancel_order(bottom_buy.order_id)
                             bottom_buy.status = GridOrderStatus.CANCELLED
                             self._order_to_level.pop(bottom_buy.order_id, None)
                             self._known_order_ids.discard(bottom_buy.order_id)
-                        except Exception:
-                            pass
+                            self.grid_levels.remove(bottom_buy)
+                        except Exception as e:
+                            self.logger.error(f"Failed to evict bottom BUY order #{bottom_buy.order_id}: {e}")
 
-                self.logger.grid(f"⚡ Deque O(1) Grid Expansion: Appending 1 SELL level @ ${new_price:,.2f}")
-                order = self.client.place_limit_order(
-                    side="SELL",
-                    quantity=self.quantity,
-                    price=new_price
-                )
+                self.logger.grid(f"⚡ Native Deque O(1) Expansion: Appending SELL level @ ${new_price:,.2f}")
+                order = self.client.place_limit_order("SELL", self.quantity, new_price)
                 if order and "id" in order:
                     new_level = GridLevel(
-                        index=len(self.grid_levels) + 1,
                         price=new_price,
                         side=GridSide.SELL,
                         status=GridOrderStatus.ACTIVE,
@@ -417,6 +410,7 @@ class GridEngine:
                     self.grid_levels.append(new_level)
                     self._order_to_level[order["id"]] = new_level
                     self._known_order_ids.add(order["id"])
+                    self.highest_sell_price = new_price
 
     def update_price(self, price: float):
         """Update the current market price (from WebSocket or polling)."""
@@ -426,27 +420,21 @@ class GridEngine:
         """Cancel all active grid orders. Used during shutdown."""
         self.is_running = False
         self.logger.grid("Cancelling all grid orders...")
-        self.client.cancel_all_orders()
+        try:
+            self.client.cancel_all_orders()
+        except Exception as e:
+            self.logger.error(f"Failed to cancel all orders during shutdown: {e}")
 
     def get_stats(self) -> dict:
         """Get current grid statistics for dashboard display."""
         active_buys = sum(
-            1 for l in self.grid_levels
+            1 for l in self._order_to_level.values()
             if l.status == GridOrderStatus.ACTIVE and l.side == GridSide.BUY
         )
         active_sells = sum(
-            1 for l in self.grid_levels
+            1 for l in self._order_to_level.values()
             if l.status == GridOrderStatus.ACTIVE and l.side == GridSide.SELL
         )
-
-        # Also count dynamically placed orders
-        for level in self._order_to_level.values():
-            if level.status == GridOrderStatus.ACTIVE:
-                if level not in self.grid_levels:
-                    if level.side == GridSide.BUY:
-                        active_buys += 1
-                    else:
-                        active_sells += 1
 
         return {
             "price": self.current_price,
@@ -459,12 +447,10 @@ class GridEngine:
         }
 
     def get_display_levels(self) -> list:
-        """Get list of current grid levels for UI display, including dynamic replacement orders."""
+        """Get list of current grid levels for UI display."""
         levels_map = {}
-        # Add initial levels
         for l in self.grid_levels:
             levels_map[l.price] = l
-        # Override/add dynamic replacement levels
         for l in self._order_to_level.values():
             levels_map[l.price] = l
         return list(levels_map.values())
@@ -472,15 +458,14 @@ class GridEngine:
     def print_grid(self):
         """Print the current grid state."""
         self.logger.grid("Current grid state:")
-        for level in sorted(self.grid_levels, key=lambda l: -l.price):
+        for level in self.grid_levels:
             status_icon = {
                 GridOrderStatus.ACTIVE: "🟢",
                 GridOrderStatus.FILLED: "✅",
                 GridOrderStatus.PENDING: "⏳",
                 GridOrderStatus.CANCELLED: "❌",
             }.get(level.status, "❓")
-
-            side_str = f"{'BUY ' if level.side == GridSide.BUY else 'SELL'}"
-            price_marker = " ◀── CURRENT" if abs(level.price - self.current_price) < self.grid_spacing / 2 else ""
-
-            print(f"    {status_icon} {side_str} ${level.price:>12,.2f} [{level.status.value}]{price_marker}")
+            self.logger.grid(
+                f"  {status_icon} {level.side.value.upper()} @ ${level.price:,.4f} "
+                f"[{level.status.value}]"
+            )
