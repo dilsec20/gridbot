@@ -65,8 +65,18 @@ function connectSocket() {
     socket.on('bot_stopped', handleBotStopped);
     socket.on('bot_error', handleBotError);
     socket.on('bot_config_sync', function(data) {
-        if (data && data.config) {
-            populateFormConfig(data.config);
+        if (data) {
+            if (data.config) populateFormConfig(data.config);
+            const modeLabel = document.getElementById('modeLabel');
+            if (modeLabel && data.use_testnet !== undefined) {
+                if (!data.use_testnet) {
+                    modeLabel.textContent = 'REAL MONEY LIVE';
+                    modeLabel.className = 'badge badge-live';
+                } else {
+                    modeLabel.textContent = 'TESTNET';
+                    modeLabel.className = 'badge badge-testnet';
+                }
+            }
         }
     });
 }

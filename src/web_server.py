@@ -300,8 +300,9 @@ def handle_connect():
     else:
         emit('auto_mode_update', {'active': False})
 
-    # Always sync current saved configuration to UI on connect
-    emit('bot_config_sync', {'config': current_config})
+    # Always sync current saved configuration & mode badge to UI on connect
+    is_testnet = bool(current_config.get('use_testnet', False) or current_config.get('use_demo', False))
+    emit('bot_config_sync', {'config': current_config, 'use_testnet': is_testnet})
 
     # Sync bot running state & grid levels
     global shared_grid_engine, shared_risk_manager, _cached_client
