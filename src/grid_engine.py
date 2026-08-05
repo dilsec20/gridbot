@@ -344,8 +344,8 @@ class GridEngine:
         min_active = min(active_prices)
         max_active = max(active_prices)
 
-        # Dynamic Expansion Lower: Price dropped below lowest active grid level by 1 step
-        if self.current_price < (min_active - 0.9 * self.grid_spacing):
+        # Dynamic Expansion Lower: Require price to drop past lowest active level by 1 full spacing step
+        if self.current_price <= (min_active - 1.0 * self.grid_spacing):
             new_price = round(min_active - self.grid_spacing, self.tick_size)
             if new_price > 0:
                 notional = new_price * self.quantity_per_grid
@@ -369,8 +369,8 @@ class GridEngine:
                         self._order_to_level[order["id"]] = new_level
                         self._known_order_ids.add(order["id"])
 
-        # Dynamic Expansion Upper: Price rose above highest active grid level by 1 step
-        elif self.current_price > (max_active + 0.9 * self.grid_spacing):
+        # Dynamic Expansion Upper: Require price to rise past highest active level by 1 full spacing step
+        elif self.current_price >= (max_active + 1.0 * self.grid_spacing):
             new_price = round(max_active + self.grid_spacing, self.tick_size)
             notional = new_price * self.quantity_per_grid
             can_place, reason = self.risk_manager.can_place_order(notional, "sell")
