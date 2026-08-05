@@ -1,0 +1,76 @@
+{
+  "symbol": "BTC/USDT",
+  "completed_cycles": 3,
+  "quantity": 0.01,
+  "grid_spacing": 1.0,
+  "lowest_buy_price": 97.0,
+  "highest_sell_price": 104.0,
+  "inventory_state": "normal",
+  "realized_pnl": 0.01,
+  "grid_levels_snapshot": [
+    {
+      "price": 96.0,
+      "side": "buy",
+      "status": "filled",
+      "order_id": "1001",
+      "is_replacement": false
+    },
+    {
+      "price": 97.0,
+      "side": "sell",
+      "status": "filled",
+      "order_id": "1009",
+      "is_replacement": true
+    },
+    {
+      "price": 97.0,
+      "side": "buy",
+      "status": "active",
+      "order_id": "1002",
+      "is_replacement": false
+    },
+    {
+      "price": 98.0,
+      "side": "buy",
+      "status": "active",
+      "order_id": "1003",
+      "is_replacement": false
+    },
+    {
+      "price": 99.0,
+      "side": "buy",
+      "status": "active",
+      "order_id": "1004",
+      "is_replacement": false
+    },
+    {
+      "price": 101.0,
+      "side": "sell",
+      "status": "active",
+      "order_id": "1005",
+      "is_replacement": false
+    },
+    {
+      "price": 102.0,
+      "side": "sell",
+      "status": "active",
+      "order_id": "1006",
+      "is_replacement": false
+    },
+    {
+      "price": 103.0,
+      "side": "sell",
+      "status": "active",
+      "order_id": "1007",
+      "is_replacement": false
+    },
+    {
+      "price": 104.0,
+      "side": "sell",
+      "status": "active",
+      "order_id": "1008",
+      "is_replacement": false
+    }
+  ],
+  "last_updated": 1785946041.6756938
+}
