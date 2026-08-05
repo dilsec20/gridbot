@@ -31,9 +31,10 @@ class TaxReportGenerator:
         os.makedirs(self.log_dir, exist_ok=True)
         self.output_csv = os.path.join(self.log_dir, "tax_report_2026.csv")
 
-    def generate_report(self, client=None, grid_engine=None) -> str:
+    def generate_report(self, client=None, grid_engine=None, usdt_inr_rate: float = 88.50) -> str:
         """
         Generate tax report CSV combining Binance API history and local cycle logs.
+        Includes dual currency columns (USDT & INR ₹) for Indian CA compliance (Section 115BBH).
         Returns path to generated CSV file.
         """
         trades_data = []
@@ -63,15 +64,20 @@ class TaxReportGenerator:
                         funding = 0.0
                         net_pnl = round(pnl - cycle_fees - funding, 4)
 
+                        net_pnl_inr = round(net_pnl * usdt_inr_rate, 2)
+                        fees_inr = round(cycle_fees * usdt_inr_rate, 2)
+
                         trades_data.append({
                             "date": date_str or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "coin": coin,
                             "buy_price": f"${buy_price:,.4f}",
                             "sell_price": f"${sell_price:,.4f}",
                             "qty": round(qty, 4),
-                            "fees": f"${cycle_fees:,.4f}",
-                            "funding": "$0.0000",
-                            "net_pnl": f"${net_pnl:+.4f}",
+                            "fees_usdt": f"${cycle_fees:,.4f}",
+                            "fees_inr": f"₹{fees_inr:,.2f}",
+                            "funding_usdt": "$0.0000",
+                            "net_pnl_usdt": f"${net_pnl:+.4f}",
+                            "net_pnl_inr": f"₹{net_pnl_inr:+,.2f}",
                             "raw_pnl": pnl,
                             "raw_fees": cycle_fees,
                             "raw_funding": 0.0
@@ -105,15 +111,20 @@ class TaxReportGenerator:
 
                 for i in range(1, cycles + 1):
                     net_pnl = round(per_cycle_pnl - cycle_fees, 4)
+                    net_pnl_inr = round(net_pnl * usdt_inr_rate, 2)
+                    fees_inr = round(cycle_fees * usdt_inr_rate, 2)
+
                     trades_data.append({
                         "date": now_str,
                         "coin": getattr(grid_engine, "symbol", "SOL/USDT"),
                         "buy_price": f"${curr_price - 0.075:,.4f}",
                         "sell_price": f"${curr_price + 0.075:,.4f}",
                         "qty": round(qty, 4),
-                        "fees": f"${cycle_fees:,.4f}",
-                        "funding": "$0.0000",
-                        "net_pnl": f"${net_pnl:+.4f}",
+                        "fees_usdt": f"${cycle_fees:,.4f}",
+                        "fees_inr": f"₹{fees_inr:,.2f}",
+                        "funding_usdt": "$0.0000",
+                        "net_pnl_usdt": f"${net_pnl:+.4f}",
+                        "net_pnl_inr": f"₹{net_pnl_inr:+,.2f}",
                         "raw_pnl": per_cycle_pnl,
                         "raw_fees": cycle_fees,
                         "raw_funding": 0.0
@@ -124,15 +135,21 @@ class TaxReportGenerator:
         # 4. Baseline demonstration trade if empty
         if not trades_data:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            net_pnl = 0.3547
+            net_pnl_inr = round(net_pnl * usdt_inr_rate, 2)
+            fees_inr = round(0.0488 * usdt_inr_rate, 2)
+
             trades_data.append({
                 "date": now_str,
                 "coin": "SOL/USDT",
                 "buy_price": "$73.7600",
                 "sell_price": "$73.9100",
                 "qty": 2.6900,
-                "fees": "$0.0488",
-                "funding": "$0.0000",
-                "net_pnl": "+$0.3547",
+                "fees_usdt": "$0.0488",
+                "fees_inr": f"₹{fees_inr:,.2f}",
+                "funding_usdt": "$0.0000",
+                "net_pnl_usdt": "+$0.3547",
+                "net_pnl_inr": f"₹{net_pnl_inr:+,.2f}",
                 "raw_pnl": 0.4035,
                 "raw_fees": 0.0488,
                 "raw_funding": 0.0
@@ -143,7 +160,13 @@ class TaxReportGenerator:
         net_taxable_profit = total_realized_profit - total_trading_fees - total_funding_fees
         num_trades = len(trades_data)
 
-        # Write clean CSV file
+        # Calculate INR summary totals
+        total_realized_profit_inr = round(total_realized_profit * usdt_inr_rate, 2)
+        total_trading_fees_inr = round(total_trading_fees * usdt_inr_rate, 2)
+        total_funding_fees_inr = round(total_funding_fees * usdt_inr_rate, 2)
+        net_taxable_profit_inr = round(net_taxable_profit * usdt_inr_rate, 2)
+
+        # Write clean CSV file with dual currency columns (USDT & INR)
         with open(self.output_csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             
@@ -151,12 +174,14 @@ class TaxReportGenerator:
             writer.writerow([
                 "Date",
                 "Coin",
-                "Buy Price",
-                "Sell Price",
+                "Buy Price (USDT)",
+                "Sell Price (USDT)",
                 "Qty",
                 "Trading Fees (USDT)",
+                "Trading Fees (INR ₹)",
                 "Funding Fees (USDT)",
-                "Net Realized PnL (USDT)"
+                "Net PnL (USDT)",
+                "Net PnL (INR ₹)"
             ])
             
             # Trade Rows
@@ -167,21 +192,26 @@ class TaxReportGenerator:
                     t["buy_price"],
                     t["sell_price"],
                     t["qty"],
-                    t["fees"],
-                    t["funding"],
-                    t["net_pnl"]
+                    t["fees_usdt"],
+                    t["fees_inr"],
+                    t["funding_usdt"],
+                    t["net_pnl_usdt"],
+                    t["net_pnl_inr"]
                 ])
                 
             # Summary Totals
             writer.writerow([])
             writer.writerow(["=========================================================================="])
-            writer.writerow(["CA / TAX SUMMARY TOTALS FOR FINANCIAL YEAR 2026"])
+            writer.writerow(["CA / TAX SUMMARY TOTALS FOR FINANCIAL YEAR 2026 (INDIAN INCOME TAX SEC 115BBH)"])
             writer.writerow(["=========================================================================="])
-            writer.writerow(["Metric", "Amount"])
-            writer.writerow(["Total Realized Profit", f"${total_realized_profit:,.4f} USDT"])
-            writer.writerow(["Total Trading Fees", f"${total_trading_fees:,.4f} USDT"])
-            writer.writerow(["Total Funding Fees", f"${total_funding_fees:,.4f} USDT"])
-            writer.writerow(["Net Taxable Profit", f"${net_taxable_profit:,.4f} USDT"])
-            writer.writerow(["Total Trades Executed", num_trades])
+            writer.writerow(["Metric", "Amount (USDT)", "Amount (INR ₹)"])
+            writer.writerow(["Total Realized Profit", f"${total_realized_profit:,.4f} USDT", f"₹{total_realized_profit_inr:,.2f} INR"])
+            writer.writerow(["Total Trading Fees", f"${total_trading_fees:,.4f} USDT", f"₹{total_trading_fees_inr:,.2f} INR"])
+            writer.writerow(["Total Funding Fees", f"${total_funding_fees:,.4f} USDT", f"₹{total_funding_fees_inr:,.2f} INR"])
+            writer.writerow(["Net Taxable Profit (Sec 115BBH)", f"${net_taxable_profit:,.4f} USDT", f"₹{net_taxable_profit_inr:,.2f} INR"])
+            writer.writerow(["USDT/INR Exchange Rate Applied", f"1 USDT = ₹{usdt_inr_rate:.2f} INR", f"1 USDT = ₹{usdt_inr_rate:.2f} INR"])
+            writer.writerow(["Total Trades Executed", num_trades, num_trades])
+
+        return self.output_csv
 
         return self.output_csv
