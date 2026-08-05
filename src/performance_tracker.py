@@ -90,6 +90,42 @@ class PerformanceTracker:
         fee = fill_notional * fee_rate
         self.estimated_fees_usdt += fee
 
+    def record_cycle_complete(self, cycle_num: int, cycle_pnl: float, total_pnl: float, balance: float):
+        """Record 1 clean row in completed_cycles.csv whenever a grid cycle finishes."""
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
+        symbol = self.config.get("symbol", "SOL/USDT")
+        cycle_csv_path = os.path.join(self.log_dir, "completed_cycles.csv")
+        
+        if not os.path.exists(cycle_csv_path):
+            try:
+                with open(cycle_csv_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        "Date", "Time", "Symbol", "CycleNumber", "CyclePnL_USDT",
+                        "TotalAccumulatedPnL_USDT", "WalletBalance_USDT", "EstFees_USDT"
+                    ])
+            except Exception:
+                pass
+
+        try:
+            with open(cycle_csv_path, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    date_str,
+                    time_str,
+                    symbol,
+                    cycle_num,
+                    round(cycle_pnl, 4),
+                    round(total_pnl, 4),
+                    round(balance, 2),
+                    round(self.estimated_fees_usdt, 4)
+                ])
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to log completed cycle to CSV: {e}")
+
     def audit_order_synchronization(self, grid_engine) -> bool:
         """
         Cross-check bot's tracked open orders vs actual Binance open orders.
