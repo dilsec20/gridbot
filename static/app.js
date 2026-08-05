@@ -42,7 +42,10 @@ function connectSocket() {
     socket = io({
         transports: ['websocket', 'polling'],
         reconnection: true,
-        reconnectionDelay: 1000,
+        reconnectionDelay: 500,
+        reconnectionDelayMax: 2000,
+        reconnectionAttempts: Infinity,
+        timeout: 30000
     });
 
     socket.on('connect', () => {

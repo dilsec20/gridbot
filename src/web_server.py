@@ -34,7 +34,14 @@ from tax_report_generator import TaxReportGenerator
 # ═══════════ Flask App Setup ═══════════
 app = Flask(__name__, static_folder='../static')
 app.config['SECRET_KEY'] = 'gridbot-secret-key'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode='threading',
+    ping_timeout=60,
+    ping_interval=25,
+    max_http_buffer_size=10000000
+)
 
 # ─── Global State & Cache ───
 bot_thread = None
