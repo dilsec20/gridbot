@@ -275,8 +275,15 @@ class QuantEngine:
                 regime = "Optimal Ranging Grid"
                 bias = "Neutral Oscillation"
 
-            # 4. Auto-Calculate Optimal Grid Spacing (%) based on ATR
-            recommended_spacing_percent = (atr_percent * 0.30)
+            # 4. Auto-Calculate Optimal Grid Spacing (%) based on ATR & ADX Dynamic Multiplier k
+            if adx < 10.0:
+                k = 0.25   # Tighter grid for pure consolidation / low ADX (<10)
+            elif adx < 20.0:
+                k = 0.35   # Moderate grid for balanced oscillation (10 <= ADX < 20)
+            else:
+                k = 0.50   # Wider safety grid for higher trend momentum (ADX >= 20)
+
+            recommended_spacing_percent = (atr_percent * k)
             recommended_spacing_percent = max(0.15, min(3.5, round(recommended_spacing_percent, 2)))
             recommended_spacing_usdt = round(current_price * (recommended_spacing_percent / 100.0), 6)
 
