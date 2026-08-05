@@ -394,7 +394,6 @@ class GridEngine:
                     self.grid_levels.append(new_level)
                     self._order_to_level[order["id"]] = new_level
                     self._known_order_ids.add(order["id"])
-            self._place_initial_orders()
 
     def update_price(self, price: float):
         """Update the current market price (from WebSocket or polling)."""
