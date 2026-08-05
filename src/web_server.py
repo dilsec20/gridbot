@@ -478,11 +478,6 @@ def run_bot(config):
 
     try:
         bot_running = True
-        socketio.emit('bot_started', {
-            'symbol': config['symbol'],
-            'use_testnet': config.get('use_testnet', True) and config.get('use_demo', True),
-            'config': config
-        })
         logger.system(f"Starting Grid Bot: {config['symbol']} (Testnet: {config.get('use_testnet', True)})")
 
         # ─── Initialize components ───
