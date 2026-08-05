@@ -28,6 +28,7 @@ from performance_tracker import PerformanceTracker
 from auto_portfolio_manager import AutoPortfolioManager, get_smart_max_position
 from trend_guard import TrendGuard
 from telegram_notifier import TelegramNotifier
+from tax_report_generator import TaxReportGenerator
 
 
 # ═══════════ Flask App Setup ═══════════
@@ -268,6 +269,22 @@ def api_download_csv():
             return send_file(fb_path, as_attachment=True, download_name=fallback_name, mimetype="text/csv")
             
     return {'error': 'CSV log file not found yet. Start the bot to generate performance logs!'}, 404
+
+
+@app.route('/api/download_tax_report')
+def api_download_tax_report():
+    """Generate and download CA-ready financial year Tax Report CSV."""
+    from flask import send_file
+    global _cached_client, shared_grid_engine
+    
+    logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs")
+    generator = TaxReportGenerator(log_dir=logs_dir)
+    client = _cached_client or get_shared_client()
+    
+    csv_path = generator.generate_report(client=client, grid_engine=shared_grid_engine)
+    if os.path.exists(csv_path):
+        return send_file(csv_path, as_attachment=True, download_name="tax_report_2026.csv", mimetype="text/csv")
+    return {'error': 'Failed to generate tax report.'}, 500
 
 
 # ═══════════ Socket.IO Events ═══════════
