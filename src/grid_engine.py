@@ -104,6 +104,11 @@ class GridEngine:
             if os.path.exists(self.state_file):
                 with open(self.state_file, "r") as f:
                     data = json.load(f)
+                    saved_symbol = data.get("symbol", "")
+                    if saved_symbol and saved_symbol != self.symbol:
+                        self.logger.system(f"💾 Persistent state symbol ({saved_symbol}) differs from active ({self.symbol}). Starting fresh state for {self.symbol}.")
+                        return
+
                     self.completed_cycles = data.get("completed_cycles", 0)
                     self.quantity = data.get("quantity", self.quantity)
                     self.grid_spacing = data.get("grid_spacing", self.grid_spacing)
@@ -169,9 +174,17 @@ class GridEngine:
         elif self.current_price < 1:
             self.tick_size = max(self.tick_size, 5)
 
-        # Enforce minimum quantity & lot size precision for symbol
+        # Enforce minimum quantity, lot size precision, and Binance $5.00 minimum notional
         min_qty = symbol_info.get("min_qty", 0.001)
         lot_size = symbol_info.get("lot_size", 3)
+        min_notional = float(symbol_info.get("min_notional", 5.0) or 5.0)
+
+        if self.current_price > 0:
+            min_notional_qty = min_notional / self.current_price
+            if self.quantity < min_notional_qty:
+                self.quantity = min_notional_qty
+                self.logger.grid(f"Quantity auto-scaled to meet Binance ${min_notional:.2f} min notional: {self.quantity:.6f} {self.symbol}")
+
         if self.quantity < min_qty:
             self.quantity = min_qty
             self.logger.grid(f"Quantity adjusted to exchange minimum for {self.symbol}: {self.quantity}")
