@@ -105,23 +105,43 @@ class GridEngine:
                 with open(self.state_file, "r") as f:
                     data = json.load(f)
                     self.completed_cycles = data.get("completed_cycles", 0)
+                    self.quantity = data.get("quantity", self.quantity)
+                    self.grid_spacing = data.get("grid_spacing", self.grid_spacing)
+                    self.lowest_buy_price = data.get("lowest_buy_price", 0.0)
+                    self.highest_sell_price = data.get("highest_sell_price", 0.0)
                     state_val = data.get("inventory_state", "normal")
                     try:
                         self.inventory_state = InventoryState(state_val)
                     except Exception:
                         self.inventory_state = InventoryState.NORMAL
-                    self.logger.system(f"💾 Loaded persistent state: cycles={self.completed_cycles}, inventory_state={self.inventory_state.value}")
+                    self.logger.system(f"💾 Loaded persistent snapshot: cycles={self.completed_cycles}, qty={self.quantity}, spacing=${self.grid_spacing}, state={self.inventory_state.value}")
         except Exception as e:
             self.logger.error(f"Error loading state from {self.state_file}: {e}")
 
     def _save_state(self):
-        """Save persistent bot state to disk (data/state.json)."""
+        """Save persistent bot state snapshot to disk (data/state.json)."""
         try:
             os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+            deque_snapshot = [
+                {
+                    "price": l.price,
+                    "side": l.side.value,
+                    "status": l.status.value,
+                    "order_id": l.order_id,
+                    "is_replacement": l.is_replacement
+                }
+                for l in self.grid_levels
+            ]
             state_data = {
+                "symbol": self.symbol,
                 "completed_cycles": self.completed_cycles,
+                "quantity": self.quantity,
+                "grid_spacing": self.grid_spacing,
+                "lowest_buy_price": self.lowest_buy_price,
+                "highest_sell_price": self.highest_sell_price,
                 "inventory_state": self.inventory_state.value,
                 "realized_pnl": self.risk_manager.get_realized_pnl(),
+                "grid_levels_snapshot": deque_snapshot,
                 "last_updated": time.time()
             }
             with open(self.state_file, "w") as f:
