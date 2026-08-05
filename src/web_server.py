@@ -300,6 +300,9 @@ def handle_connect():
     else:
         emit('auto_mode_update', {'active': False})
 
+    # Always sync current saved configuration to UI on connect
+    emit('bot_config_sync', {'config': current_config})
+
     # Sync bot running state & grid levels
     global shared_grid_engine, shared_risk_manager, _cached_client
     if bot_running and bot_thread is not None and bot_thread.is_alive():

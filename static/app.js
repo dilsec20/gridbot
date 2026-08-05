@@ -64,6 +64,42 @@ function connectSocket() {
     socket.on('bot_started', handleBotStarted);
     socket.on('bot_stopped', handleBotStopped);
     socket.on('bot_error', handleBotError);
+    socket.on('bot_config_sync', function(data) {
+        if (data && data.config) {
+            populateFormConfig(data.config);
+        }
+    });
+}
+
+function populateFormConfig(c) {
+    if (!c) return;
+    if (c.symbol) {
+        const select = document.getElementById('symbolSelect');
+        if (select) {
+            if (!Array.from(select.options).some(opt => opt.value === c.symbol)) {
+                const opt = document.createElement('option');
+                opt.value = c.symbol;
+                opt.textContent = c.symbol;
+                select.appendChild(opt);
+            }
+            select.value = c.symbol;
+        }
+    }
+    if (c.grid_levels && document.getElementById('gridLevels')) document.getElementById('gridLevels').value = c.grid_levels;
+    if (c.spacing_mode && document.getElementById('spacingMode')) document.getElementById('spacingMode').value = c.spacing_mode;
+    if (c.grid_spacing_percent !== undefined && document.getElementById('gridSpacingPercent')) document.getElementById('gridSpacingPercent').value = c.grid_spacing_percent;
+    if (c.grid_spacing_usdt !== undefined && document.getElementById('gridSpacing')) document.getElementById('gridSpacing').value = c.grid_spacing_usdt;
+    if (c.quantity_per_grid !== undefined && document.getElementById('gridQuantity')) document.getElementById('gridQuantity').value = c.quantity_per_grid;
+    if (c.leverage !== undefined && document.getElementById('leverage')) document.getElementById('leverage').value = c.leverage;
+    
+    const maxLossEl = document.getElementById('maxLoss') || document.getElementById('maxLossUsdt');
+    if (maxLossEl && c.max_loss_usdt !== undefined) maxLossEl.value = c.max_loss_usdt;
+    
+    const maxPosEl = document.getElementById('maxPosition') || document.getElementById('maxPositionUsdt');
+    if (maxPosEl && c.max_position_usdt !== undefined) maxPosEl.value = c.max_position_usdt;
+    
+    toggleSpacingMode();
+    updateCalculatedMetrics();
 }
 
 function updateConnectionStatus(connected) {
@@ -400,17 +436,7 @@ function handleBotStarted(data) {
     }
 
     if (data.config) {
-        const c = data.config;
-        if (c.grid_levels && document.getElementById('gridLevels')) document.getElementById('gridLevels').value = c.grid_levels;
-        if (c.spacing_mode && document.getElementById('spacingMode')) document.getElementById('spacingMode').value = c.spacing_mode;
-        if (c.grid_spacing_percent !== undefined && document.getElementById('spacingStep')) document.getElementById('spacingStep').value = c.grid_spacing_percent;
-        if (c.grid_spacing_usdt !== undefined && document.getElementById('spacingUsdt')) document.getElementById('spacingUsdt').value = c.grid_spacing_usdt;
-        if (c.quantity_per_grid !== undefined && document.getElementById('quantityPerGrid')) document.getElementById('quantityPerGrid').value = c.quantity_per_grid;
-        if (c.leverage !== undefined && document.getElementById('leverageSelect')) document.getElementById('leverageSelect').value = c.leverage;
-        if (c.max_loss_usdt !== undefined && document.getElementById('maxLossInput')) document.getElementById('maxLossInput').value = c.max_loss_usdt;
-        if (c.max_position_usdt !== undefined && document.getElementById('maxPosInput')) document.getElementById('maxPosInput').value = c.max_position_usdt;
-        toggleSpacingMode();
-        updateCalculatedMetrics();
+        populateFormConfig(data.config);
     }
 
     // Reset price history cleanly for current symbol to avoid chart spikes
