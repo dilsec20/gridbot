@@ -1,9 +1,13 @@
 """
 Grid Trading Engine — Core strategy logic.
 Manages native deque grid levels, O(1) sliding window expansion, state-machine inventory bias balancing, and fill detection.
+Includes exchange order rebuilding on startup and persistent state saving.
 """
 
 import time
+import json
+import os
+import bisect
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import deque
@@ -46,11 +50,12 @@ class GridLevel:
 
 class GridEngine:
     """
-    Core Grid Engine with Pure Native Deque O(1) Sliding Window & Trend Recovery State Machine.
-
-    Places buy orders below current price and sell orders above using a native deque.
-    When price breaches bounds, expands and evicts via native pop()/popleft() in pure O(1) time.
-    Prevents inventory over-exposure via an explicit 3-stage Inventory State Machine (NORMAL, BIAS_LIMIT, RECOVERY).
+    Production-Hardened Core Grid Engine with:
+    - Pure Native Deque O(1) Sliding Window
+    - Trend Recovery State Machine (NORMAL, BIAS_LIMIT, RECOVERY)
+    - Live Exchange Order Rebuilding on Startup (Reboot Resilience)
+    - State Persistence (data/state.json)
+    - Boundary Self-Healing & Invariant-Preserving Sorting
     """
 
     def __init__(self, config: dict, client: BinanceClient,
@@ -68,6 +73,9 @@ class GridEngine:
         # Inventory Exposure Configurable Thresholds & State Machine
         self.inventory_bias_limit_ratio = config.get("inventory_bias_limit", 0.65)
         self.inventory_state = InventoryState.NORMAL
+
+        # Persistent State File Path
+        self.state_file = os.path.join("data", "state.json")
 
         # Native O(1) Deque Grid Level Storage
         self.grid_levels: deque[GridLevel] = deque()
@@ -87,9 +95,43 @@ class GridEngine:
         self._order_to_level: dict[str, GridLevel] = {}
         self._known_order_ids: set[str] = set()
 
+        # Load persistent state if available
+        self._load_state()
+
+    def _load_state(self):
+        """Load persistent bot state from disk (data/state.json)."""
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file, "r") as f:
+                    data = json.load(f)
+                    self.completed_cycles = data.get("completed_cycles", 0)
+                    state_val = data.get("inventory_state", "normal")
+                    try:
+                        self.inventory_state = InventoryState(state_val)
+                    except Exception:
+                        self.inventory_state = InventoryState.NORMAL
+                    self.logger.system(f"💾 Loaded persistent state: cycles={self.completed_cycles}, inventory_state={self.inventory_state.value}")
+        except Exception as e:
+            self.logger.error(f"Error loading state from {self.state_file}: {e}")
+
+    def _save_state(self):
+        """Save persistent bot state to disk (data/state.json)."""
+        try:
+            os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+            state_data = {
+                "completed_cycles": self.completed_cycles,
+                "inventory_state": self.inventory_state.value,
+                "realized_pnl": self.risk_manager.get_realized_pnl(),
+                "last_updated": time.time()
+            }
+            with open(self.state_file, "w") as f:
+                json.dump(state_data, f, indent=2)
+        except Exception as e:
+            self.logger.error(f"Error saving state to {self.state_file}: {e}")
+
     def initialize(self):
-        """Calculate grid levels and place initial orders."""
-        self.logger.grid("Initializing pure native Deque O(1) grid engine...")
+        """Calculate grid levels and place initial orders or rebuild from exchange."""
+        self.logger.grid("Initializing production-hardened Deque grid engine...")
 
         # Get current price
         self.current_price = self.client.get_price()
@@ -100,7 +142,6 @@ class GridEngine:
         if not isinstance(self.tick_size, int) or self.tick_size < 0:
             self.tick_size = 4
 
-        # Dynamically scale tick_size for micro-coins to prevent price rounding to 0
         if self.current_price < 0.0001:
             self.tick_size = max(self.tick_size, 8)
         elif self.current_price < 0.01:
@@ -139,11 +180,20 @@ class GridEngine:
         self.grid_low = round(self.current_price - (half_levels * self.grid_spacing), self.tick_size)
         self.grid_high = round(self.current_price + (half_levels * self.grid_spacing), self.tick_size)
 
-        self.logger.grid(f"Grid range: {self.grid_low} — {self.grid_high}")
-        self.logger.grid(f"Levels: {self.grid_levels_count} ({half_levels} buy + {half_levels} sell)")
-        self.logger.grid(f"Quantity per level: {self.quantity}")
+        # Check if live exchange orders exist on Binance to rebuild state
+        try:
+            open_orders = self.client.get_open_orders()
+            matching_orders = [o for o in open_orders if o.get("symbol") == self.symbol or not o.get("symbol")]
+            if matching_orders and len(matching_orders) >= 2:
+                self.logger.grid(f"🔄 Rebuilding Deque state from {len(matching_orders)} live exchange orders...")
+                self._rebuild_from_exchange_orders(matching_orders)
+                self.is_running = True
+                self._save_state()
+                return
+        except Exception as e:
+            self.logger.error(f"Error checking live exchange orders for rebuild: {e}")
 
-        # Construct Native Deque (BUY levels lowest to highest, then SELL levels)
+        # Construct Fresh Native Deque
         self.grid_levels = deque()
         self._order_to_level.clear()
         self._known_order_ids.clear()
@@ -160,16 +210,71 @@ class GridEngine:
             level = GridLevel(price=price, side=GridSide.SELL)
             self.grid_levels.append(level)
 
-        # Update O(1) live boundary trackers
-        if self.grid_levels:
-            buys = [l for l in self.grid_levels if l.side == GridSide.BUY]
-            sells = [l for l in self.grid_levels if l.side == GridSide.SELL]
-            self.lowest_buy_price = buys[0].price if buys else self.current_price
-            self.highest_sell_price = sells[-1].price if sells else self.current_price
+        self._reconcile_boundaries()
 
         # Place initial orders
         self._place_initial_orders()
         self.is_running = True
+        self._save_state()
+
+    def _rebuild_from_exchange_orders(self, orders: list):
+        """Reconstruct native Deque grid state from active exchange orders on Binance."""
+        self.grid_levels.clear()
+        self._order_to_level.clear()
+        self._known_order_ids.clear()
+
+        parsed_levels = []
+        for o in orders:
+            price = float(o.get("price", 0.0))
+            side_str = str(o.get("side", "")).lower()
+            order_id = str(o.get("id", ""))
+            side = GridSide.BUY if side_str == "buy" else GridSide.SELL
+
+            level = GridLevel(
+                price=price,
+                side=side,
+                status=GridOrderStatus.ACTIVE,
+                order_id=order_id,
+                is_replacement=False
+            )
+            parsed_levels.append(level)
+            self._order_to_level[order_id] = level
+            self._known_order_ids.add(order_id)
+
+        parsed_levels.sort(key=lambda l: l.price)
+        self.grid_levels = deque(parsed_levels)
+        self._reconcile_boundaries()
+        self.logger.grid(f"✅ Rebuilt Deque with {len(self.grid_levels)} active exchange orders (Lowest Buy: ${self.lowest_buy_price:,.2f}, Highest Sell: ${self.highest_sell_price:,.2f})")
+
+    def _insert_level_sorted(self, level: GridLevel):
+        """Insert level into Deque preserving strict price-sorted order (O(1) at bounds, bisect in middle)."""
+        if not self.grid_levels:
+            self.grid_levels.append(level)
+        elif level.price < self.grid_levels[0].price:
+            self.grid_levels.appendleft(level)
+        elif level.price > self.grid_levels[-1].price:
+            self.grid_levels.append(level)
+        else:
+            prices = [l.price for l in self.grid_levels]
+            idx = bisect.bisect_left(prices, level.price)
+            self.grid_levels.insert(idx, level)
+
+        self._reconcile_boundaries()
+
+    def _reconcile_boundaries(self):
+        """Periodic self-healing sanity check for lowest_buy_price and highest_sell_price."""
+        active_buys = [l.price for l in self.grid_levels if l.side == GridSide.BUY and l.status == GridOrderStatus.ACTIVE]
+        active_sells = [l.price for l in self.grid_levels if l.side == GridSide.SELL and l.status == GridOrderStatus.ACTIVE]
+
+        if active_buys:
+            self.lowest_buy_price = min(active_buys)
+        elif self.current_price > 0:
+            self.lowest_buy_price = self.current_price
+
+        if active_sells:
+            self.highest_sell_price = max(active_sells)
+        elif self.current_price > 0:
+            self.highest_sell_price = self.current_price
 
     def _place_initial_orders(self):
         """Place all initial grid orders."""
@@ -214,6 +319,9 @@ class GridEngine:
                 level = self._order_to_level.get(order_id)
                 if level and level.status == GridOrderStatus.ACTIVE:
                     self._handle_fill(level)
+
+            # Perform boundary self-healing check periodically
+            self._reconcile_boundaries()
 
         except Exception as e:
             self.logger.error(f"Error checking fills: {e}")
@@ -281,7 +389,7 @@ class GridEngine:
                     self.completed_cycles, cycle_pnl, total_pnl, current_balance
                 )
 
-            # Auto-Compounding Check: Target Profit Growth (scale size when profit milestones hit)
+            # Auto-Compounding Check
             if self.config.get("auto_compound", True) and self.completed_cycles % 5 == 0:
                 old_qty = self.quantity
                 self.quantity = self.risk_manager.get_compounded_quantity(
@@ -289,6 +397,9 @@ class GridEngine:
                 )
                 if self.quantity != old_qty:
                     self.logger.system(f"💰 Auto-Compounded order size: {old_qty} → {self.quantity}")
+
+            # Save state on cycle completion
+            self._save_state()
         else:
             self.logger.grid(
                 f"Initial {filled_level.side.value.upper()} filled at ${filled_level.price:,.4f} — "
@@ -314,34 +425,22 @@ class GridEngine:
                 self._order_to_level[order["id"]] = new_level
                 self._known_order_ids.add(order["id"])
 
-                # Deque Synchronization: Append/insert replacement order into deque maintaining price order
-                if new_side == GridSide.SELL:
-                    self.grid_levels.append(new_level)
-                    self.highest_sell_price = max(self.highest_sell_price, new_price)
-                else:
-                    self.grid_levels.appendleft(new_level)
-                    self.lowest_buy_price = min(self.lowest_buy_price, new_price)
+                # Deque Synchronization: Insert replacement level preserving strict price order
+                self._insert_level_sorted(new_level)
         else:
             self.logger.warn(f"Risk manager blocked replacement order at ${new_price:,.2f}")
 
     def _check_auto_trailing_recenter(self):
         """
         Pure Native O(1) Deque Sliding Window Expansion & Trend Recovery State Machine.
-        
-        - Uses native O(1) pop() / popleft() for evictions (ZERO remove() searches).
-        - Enforces 3-Stage State Machine (NORMAL, BIAS_LIMIT, RECOVERY) to eliminate boundary oscillations.
         """
         if not self.is_running or self.current_price <= 0:
             return
 
         if self.lowest_buy_price <= 0 or self.highest_sell_price <= 0:
-            active_levels = [l for l in self._order_to_level.values() if l.status == GridOrderStatus.ACTIVE]
-            if not active_levels:
+            self._reconcile_boundaries()
+            if self.lowest_buy_price <= 0 or self.highest_sell_price <= 0:
                 return
-            buys = [l.price for l in active_levels if l.side == GridSide.BUY]
-            sells = [l.price for l in active_levels if l.side == GridSide.SELL]
-            self.lowest_buy_price = min(buys) if buys else self.current_price
-            self.highest_sell_price = max(sells) if sells else self.current_price
 
         # 1. Calculate Inventory Bias & Update State Machine
         inventory_notional = 0.0
@@ -357,20 +456,23 @@ class GridEngine:
         except Exception as e:
             self.logger.error(f"Error checking inventory bias: {e}")
 
-        recovery_threshold = max_inventory_bias * 0.75  # 75% hysteresis threshold for recovery
+        recovery_threshold = max_inventory_bias * 0.75
 
         # State Machine Transition Logic
         if abs(inventory_notional) >= max_inventory_bias:
             if self.inventory_state != InventoryState.BIAS_LIMIT:
                 self.inventory_state = InventoryState.BIAS_LIMIT
                 self.logger.risk(f"🛡️ Inventory State -> BIAS_LIMIT (Notional: ${inventory_notional:,.2f})")
+                self._save_state()
         elif abs(inventory_notional) <= recovery_threshold:
             if self.inventory_state == InventoryState.BIAS_LIMIT:
                 self.inventory_state = InventoryState.RECOVERY
                 self.logger.risk(f"🛡️ Inventory State -> RECOVERY (Notional: ${inventory_notional:,.2f})")
+                self._save_state()
             elif self.inventory_state == InventoryState.RECOVERY:
                 self.inventory_state = InventoryState.NORMAL
                 self.logger.risk(f"🛡️ Inventory State -> NORMAL (Notional: ${inventory_notional:,.2f})")
+                self._save_state()
 
         active_count = sum(1 for l in self._order_to_level.values() if l.status == GridOrderStatus.ACTIVE)
 
@@ -405,10 +507,9 @@ class GridEngine:
                             status=GridOrderStatus.ACTIVE,
                             order_id=order["id"]
                         )
-                        self.grid_levels.appendleft(new_level)  # Pure O(1) Left Insertion!
+                        self._insert_level_sorted(new_level)
                         self._order_to_level[order["id"]] = new_level
                         self._known_order_ids.add(order["id"])
-                        self.lowest_buy_price = new_price
 
         # Deque Upper Expansion: Require price to rise past highest sell by 1 full spacing step
         elif self.current_price >= (self.highest_sell_price + 1.0 * self.grid_spacing):
@@ -440,10 +541,9 @@ class GridEngine:
                         status=GridOrderStatus.ACTIVE,
                         order_id=order["id"]
                     )
-                    self.grid_levels.append(new_level)  # Pure O(1) Right Insertion!
+                    self._insert_level_sorted(new_level)
                     self._order_to_level[order["id"]] = new_level
                     self._known_order_ids.add(order["id"])
-                    self.highest_sell_price = new_price
 
     def update_price(self, price: float):
         """Update the current market price (from WebSocket or polling)."""
