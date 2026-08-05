@@ -70,13 +70,14 @@ class TelegramNotifier:
         thread.start()
 
     def _send(self, message: str):
-        """Actually send the message via Telegram Bot API."""
+        """Actually send the message via Telegram Bot API with robust fallback."""
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            # Strip markdown asterisks for clean plain-text delivery
+            clean_msg = message.replace('*', '')
             data = urllib.parse.urlencode({
                 'chat_id': self.chat_id,
-                'text': message,
-                'parse_mode': 'Markdown',
+                'text': clean_msg,
                 'disable_web_page_preview': 'true',
             }).encode('utf-8')
 
