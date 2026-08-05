@@ -98,15 +98,13 @@ class TelegramNotifier:
         self.total_cycles += 1
         self.total_pnl += pnl
 
-        # Only send every 5th cycle to avoid spam
-        if cycle_num % 5 == 0:
-            self._send_async(
-                f"✅ *Cycle #{cycle_num} Completed!*\n\n"
-                f"Pair: `{symbol}`\n"
-                f"PnL: `+${pnl:.4f}`\n"
-                f"Total: `+${total_pnl:.4f}`\n"
-                f"Session: {self.total_cycles} cycles"
-            )
+        self._send_async(
+            f"✅ *Cycle #{cycle_num} Completed!*\n\n"
+            f"Pair: `{symbol}`\n"
+            f"Cycle PnL: `+${pnl:.4f}` USDT\n"
+            f"Total PnL: `+${total_pnl:.4f}` USDT\n"
+            f"Session: {self.total_cycles} cycles"
+        )
 
     def notify_auto_switch(self, from_sym: str, to_sym: str, from_score: int, to_score: int):
         """Alert when Auto Portfolio Manager switches coins."""

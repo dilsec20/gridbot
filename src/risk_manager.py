@@ -154,3 +154,14 @@ class RiskManager:
     def get_realized_pnl(self) -> float:
         """Get realized PnL only."""
         return self.realized_pnl
+
+    def get_compounded_quantity(self, current_qty: float, spacing_pct: float = 0.5) -> float:
+        """Calculate compounded order quantity based on realized equity growth."""
+        try:
+            if self.initial_balance <= 0:
+                return current_qty
+            growth_ratio = max(1.0, (self.initial_balance + max(0.0, self.realized_pnl)) / self.initial_balance)
+            new_qty = round(current_qty * growth_ratio, 6)
+            return max(current_qty, new_qty)
+        except Exception:
+            return current_qty

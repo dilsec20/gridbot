@@ -554,12 +554,15 @@ def run_bot(config):
         tg = TelegramNotifier(tg_token, tg_chat, logger)
 
         # Wire Telegram to grid cycle completions
+        grid_engine.telegram_notifier = tg
         original_handle_fill = handle_ws_fill
         def handle_ws_fill_with_tg(order_id):
+            old_cycles = grid_engine.completed_cycles
             original_handle_fill(order_id)
-            if grid_engine.completed_cycles > 0:
+            new_cycles = grid_engine.completed_cycles
+            if new_cycles > old_cycles:
                 tg.notify_cycle_complete(
-                    grid_engine.completed_cycles,
+                    new_cycles,
                     grid_engine.grid_spacing * grid_engine.quantity,
                     risk_manager.get_realized_pnl(),
                     config['symbol']
