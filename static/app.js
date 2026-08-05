@@ -112,7 +112,9 @@ function populateFormConfig(c) {
     if (maxPosEl && c.max_position_usdt !== undefined) maxPosEl.value = c.max_position_usdt;
     
     toggleSpacingMode();
-    updateCalculatedMetrics();
+    if (typeof updateCalculatedMetrics === 'function') {
+        updateCalculatedMetrics();
+    }
 }
 
 function updateConnectionStatus(connected) {
@@ -1063,7 +1065,7 @@ setInterval(() => {
 }, 1000);
 
 // Socket.IO listeners for Auto Mode events
-if (typeof socket !== 'undefined') {
+if (socket) {
     socket.on('auto_mode_update', function(data) {
         autoModeActive = data.active;
         const btn = document.getElementById('autoModeBtn');
