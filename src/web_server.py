@@ -312,8 +312,11 @@ def handle_connect():
     emit('bot_config_sync', {'config': current_config, 'use_testnet': is_testnet})
 
     # Sync bot running state & grid levels
-    global shared_grid_engine, shared_risk_manager, _cached_client
-    if bot_running and bot_thread is not None and bot_thread.is_alive():
+    global shared_grid_engine, shared_risk_manager, _cached_client, bot_thread, bot_running
+    if bot_thread is not None and bot_thread.is_alive():
+        bot_running = True
+
+    if bot_running:
         symbol = current_config.get('symbol', 'SOL/USDT')
         is_testnet = bool(current_config.get('use_testnet', False) or current_config.get('use_demo', False))
         emit('bot_started', {
@@ -331,8 +334,6 @@ def handle_connect():
                     send_stats_update(shared_grid_engine, client, shared_risk_manager)
                 except Exception:
                     pass
-    else:
-        emit('bot_stopped', {'pnl': 0, 'cycles': 0})
 
 
 @socketio.on('disconnect')
