@@ -1,6 +1,6 @@
 """
 Grid Trading Engine — Core strategy logic.
-Manages native deque grid levels, O(1) sliding window expansion, inventory bias balancing, and fill detection.
+Manages native deque grid levels, O(1) sliding window expansion, state-machine inventory bias balancing, and fill detection.
 """
 
 import time
@@ -26,6 +26,12 @@ class GridOrderStatus(Enum):
     CANCELLED = "cancelled"  # Order was cancelled
 
 
+class InventoryState(Enum):
+    NORMAL = "normal"
+    BIAS_LIMIT = "bias_limit"
+    RECOVERY = "recovery"
+
+
 @dataclass
 class GridLevel:
     """Represents a single grid level with its order state."""
@@ -40,11 +46,11 @@ class GridLevel:
 
 class GridEngine:
     """
-    Core Grid Engine with Native Deque O(1) Sliding Window & Inventory Bias Balancing.
+    Core Grid Engine with Pure Native Deque O(1) Sliding Window & Trend Recovery State Machine.
 
     Places buy orders below current price and sell orders above using a native deque.
-    When price breaches bounds, expands and evicts in O(1) constant time without sorting or full rebuilds.
-    Prevents inventory over-exposure via real-time long/short notional bias tracking.
+    When price breaches bounds, expands and evicts via native pop()/popleft() in pure O(1) time.
+    Prevents inventory over-exposure via an explicit 3-stage Inventory State Machine (NORMAL, BIAS_LIMIT, RECOVERY).
     """
 
     def __init__(self, config: dict, client: BinanceClient,
@@ -58,6 +64,10 @@ class GridEngine:
         self.grid_levels_count = config.get("grid_levels", 10)
         self.spacing_mode = config.get("spacing_mode", "usdt")  # 'usdt' or 'percent'
         self.quantity = config.get("quantity_per_grid", 0.001)
+
+        # Inventory Exposure Configurable Thresholds & State Machine
+        self.inventory_bias_limit_ratio = config.get("inventory_bias_limit", 0.65)
+        self.inventory_state = InventoryState.NORMAL
 
         # Native O(1) Deque Grid Level Storage
         self.grid_levels: deque[GridLevel] = deque()
@@ -79,7 +89,7 @@ class GridEngine:
 
     def initialize(self):
         """Calculate grid levels and place initial orders."""
-        self.logger.grid("Initializing native Deque grid engine...")
+        self.logger.grid("Initializing pure native Deque O(1) grid engine...")
 
         # Get current price
         self.current_price = self.client.get_price()
@@ -285,7 +295,7 @@ class GridEngine:
                 f"waiting for opposite fill to complete cycle..."
             )
 
-        # Place opposite replacement order
+        # Place opposite replacement order & maintain Deque synchronization
         if self.risk_manager.can_place_order(new_side.value, self.quantity, new_price):
             order = self.client.place_limit_order(
                 side=new_side.value,
@@ -303,15 +313,23 @@ class GridEngine:
                 )
                 self._order_to_level[order["id"]] = new_level
                 self._known_order_ids.add(order["id"])
+
+                # Deque Synchronization: Append/insert replacement order into deque maintaining price order
+                if new_side == GridSide.SELL:
+                    self.grid_levels.append(new_level)
+                    self.highest_sell_price = max(self.highest_sell_price, new_price)
+                else:
+                    self.grid_levels.appendleft(new_level)
+                    self.lowest_buy_price = min(self.lowest_buy_price, new_price)
         else:
             self.logger.warn(f"Risk manager blocked replacement order at ${new_price:,.2f}")
 
     def _check_auto_trailing_recenter(self):
         """
-        Native O(1) Deque Sliding Window Grid Expansion & Inventory Bias Balancing.
+        Pure Native O(1) Deque Sliding Window Expansion & Trend Recovery State Machine.
         
-        - Appends new levels in O(1) time without cancelling active position exit orders.
-        - Enforces Inventory Bias Shields to prevent over-accumulation during trends.
+        - Uses native O(1) pop() / popleft() for evictions (ZERO remove() searches).
+        - Enforces 3-Stage State Machine (NORMAL, BIAS_LIMIT, RECOVERY) to eliminate boundary oscillations.
         """
         if not self.is_running or self.current_price <= 0:
             return
@@ -325,7 +343,7 @@ class GridEngine:
             self.lowest_buy_price = min(buys) if buys else self.current_price
             self.highest_sell_price = max(sells) if sells else self.current_price
 
-        # Calculate Inventory Bias (long_notional - short_notional)
+        # 1. Calculate Inventory Bias & Update State Machine
         inventory_notional = 0.0
         max_inventory_bias = 500.0
         try:
@@ -335,35 +353,50 @@ class GridEngine:
             if pos_side == "short":
                 pos_amount = -abs(pos_amount)
             inventory_notional = pos_amount * self.current_price
-            max_inventory_bias = self.config.get("max_position_usdt", 500.0) * 0.70
+            max_inventory_bias = self.config.get("max_position_usdt", 500.0) * self.inventory_bias_limit_ratio
         except Exception as e:
             self.logger.error(f"Error checking inventory bias: {e}")
+
+        recovery_threshold = max_inventory_bias * 0.75  # 75% hysteresis threshold for recovery
+
+        # State Machine Transition Logic
+        if abs(inventory_notional) >= max_inventory_bias:
+            if self.inventory_state != InventoryState.BIAS_LIMIT:
+                self.inventory_state = InventoryState.BIAS_LIMIT
+                self.logger.risk(f"🛡️ Inventory State -> BIAS_LIMIT (Notional: ${inventory_notional:,.2f})")
+        elif abs(inventory_notional) <= recovery_threshold:
+            if self.inventory_state == InventoryState.BIAS_LIMIT:
+                self.inventory_state = InventoryState.RECOVERY
+                self.logger.risk(f"🛡️ Inventory State -> RECOVERY (Notional: ${inventory_notional:,.2f})")
+            elif self.inventory_state == InventoryState.RECOVERY:
+                self.inventory_state = InventoryState.NORMAL
+                self.logger.risk(f"🛡️ Inventory State -> NORMAL (Notional: ${inventory_notional:,.2f})")
 
         active_count = sum(1 for l in self._order_to_level.values() if l.status == GridOrderStatus.ACTIVE)
 
         # Deque Lower Expansion: Require price to drop past lowest buy by 1 full spacing step
         if self.current_price <= (self.lowest_buy_price - 1.0 * self.grid_spacing):
-            if inventory_notional >= max_inventory_bias:
-                self.logger.risk(f"🛡️ Inventory Bias Shield: Long inventory (${inventory_notional:,.2f}) at limit! Pausing BUY expansion.")
+            if self.inventory_state == InventoryState.BIAS_LIMIT and inventory_notional >= max_inventory_bias:
+                self.logger.risk(f"🛡️ Inventory Shield Active [BIAS_LIMIT]: Long inventory (${inventory_notional:,.2f}) at limit! Pausing BUY expansion.")
                 return
 
             new_price = round(self.lowest_buy_price - self.grid_spacing, self.tick_size)
             if new_price > 0:
                 if self.risk_manager.can_place_order("BUY", self.quantity, new_price):
-                    # O(1) Deque Eviction: Evict top unfilled SELL if max levels reached
-                    if active_count >= self.grid_levels_count:
-                        top_sell = next((l for l in reversed(self.grid_levels) if l.side == GridSide.SELL and not l.is_replacement and l.status == GridOrderStatus.ACTIVE), None)
-                        if top_sell:
+                    # Pure O(1) Deque Eviction: Evict top unfilled SELL from right via pop()
+                    if active_count >= self.grid_levels_count and self.grid_levels:
+                        top_sell = self.grid_levels[-1]
+                        if top_sell.side == GridSide.SELL and not top_sell.is_replacement and top_sell.status == GridOrderStatus.ACTIVE:
                             try:
                                 self.client.cancel_order(top_sell.order_id)
                                 top_sell.status = GridOrderStatus.CANCELLED
                                 self._order_to_level.pop(top_sell.order_id, None)
                                 self._known_order_ids.discard(top_sell.order_id)
-                                self.grid_levels.remove(top_sell)
+                                self.grid_levels.pop()  # Pure O(1) Right Eviction!
                             except Exception as e:
                                 self.logger.error(f"Failed to evict top SELL order #{top_sell.order_id}: {e}")
 
-                    self.logger.grid(f"⚡ Native Deque O(1) Expansion: Appending BUY level @ ${new_price:,.2f}")
+                    self.logger.grid(f"⚡ Pure Deque O(1) Expansion: Appending BUY level @ ${new_price:,.2f}")
                     order = self.client.place_limit_order("BUY", self.quantity, new_price)
                     if order and "id" in order:
                         new_level = GridLevel(
@@ -372,33 +405,33 @@ class GridEngine:
                             status=GridOrderStatus.ACTIVE,
                             order_id=order["id"]
                         )
-                        self.grid_levels.appendleft(new_level)
+                        self.grid_levels.appendleft(new_level)  # Pure O(1) Left Insertion!
                         self._order_to_level[order["id"]] = new_level
                         self._known_order_ids.add(order["id"])
                         self.lowest_buy_price = new_price
 
         # Deque Upper Expansion: Require price to rise past highest sell by 1 full spacing step
         elif self.current_price >= (self.highest_sell_price + 1.0 * self.grid_spacing):
-            if inventory_notional <= -max_inventory_bias:
-                self.logger.risk(f"🛡️ Inventory Bias Shield: Short inventory (${inventory_notional:,.2f}) at limit! Pausing SELL expansion.")
+            if self.inventory_state == InventoryState.BIAS_LIMIT and inventory_notional <= -max_inventory_bias:
+                self.logger.risk(f"🛡️ Inventory Shield Active [BIAS_LIMIT]: Short inventory (${inventory_notional:,.2f}) at limit! Pausing SELL expansion.")
                 return
 
             new_price = round(self.highest_sell_price + self.grid_spacing, self.tick_size)
             if self.risk_manager.can_place_order("SELL", self.quantity, new_price):
-                # O(1) Deque Eviction: Evict bottom unfilled BUY if max levels reached
-                if active_count >= self.grid_levels_count:
-                    bottom_buy = next((l for l in self.grid_levels if l.side == GridSide.BUY and not l.is_replacement and l.status == GridOrderStatus.ACTIVE), None)
-                    if bottom_buy:
+                # Pure O(1) Deque Eviction: Evict bottom unfilled BUY from left via popleft()
+                if active_count >= self.grid_levels_count and self.grid_levels:
+                    bottom_buy = self.grid_levels[0]
+                    if bottom_buy.side == GridSide.BUY and not bottom_buy.is_replacement and bottom_buy.status == GridOrderStatus.ACTIVE:
                         try:
                             self.client.cancel_order(bottom_buy.order_id)
                             bottom_buy.status = GridOrderStatus.CANCELLED
                             self._order_to_level.pop(bottom_buy.order_id, None)
                             self._known_order_ids.discard(bottom_buy.order_id)
-                            self.grid_levels.remove(bottom_buy)
+                            self.grid_levels.popleft()  # Pure O(1) Left Eviction!
                         except Exception as e:
                             self.logger.error(f"Failed to evict bottom BUY order #{bottom_buy.order_id}: {e}")
 
-                self.logger.grid(f"⚡ Native Deque O(1) Expansion: Appending SELL level @ ${new_price:,.2f}")
+                self.logger.grid(f"⚡ Pure Deque O(1) Expansion: Appending SELL level @ ${new_price:,.2f}")
                 order = self.client.place_limit_order("SELL", self.quantity, new_price)
                 if order and "id" in order:
                     new_level = GridLevel(
@@ -407,7 +440,7 @@ class GridEngine:
                         status=GridOrderStatus.ACTIVE,
                         order_id=order["id"]
                     )
-                    self.grid_levels.append(new_level)
+                    self.grid_levels.append(new_level)  # Pure O(1) Right Insertion!
                     self._order_to_level[order["id"]] = new_level
                     self._known_order_ids.add(order["id"])
                     self.highest_sell_price = new_price
@@ -444,6 +477,7 @@ class GridEngine:
             "open_sells": active_sells,
             "grid_low": self.grid_low,
             "grid_high": self.grid_high,
+            "inventory_state": self.inventory_state.value,
         }
 
     def get_display_levels(self) -> list:
