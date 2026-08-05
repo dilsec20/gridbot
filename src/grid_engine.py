@@ -6,6 +6,7 @@ Manages grid levels, order placement, fill detection, and PnL tracking.
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from collections import deque
 from typing import Optional
 
 from logger import BotLogger
@@ -325,33 +326,47 @@ class GridEngine:
             self.logger.warn(f"Risk manager blocked replacement order at ${new_price:,.2f}")
 
     def _check_auto_trailing_recenter(self):
-        """Dynamic Incremental Grid Expansion.
-        Instead of cancelling existing grid levels, when price steps out of grid bounds,
-        simply append 1 new grid level in the movement direction!
-        Zero order cancellations = Zero loss realization!
+        """O(1) Deque Sliding Window Grid Expansion & Eviction.
+        Instead of rebuilding the grid, when price moves 1 full step beyond boundary:
+        - Append 1 new level in the movement direction (BUY or SELL).
+        - If total active orders exceed grid_levels_count, evict/cancel the furthest inactive level from opposite side!
+        Zero rebuilds, zero position disturbance, O(1) constant time complexity!
         """
         if not self.is_running or self.current_price <= 0:
             return
 
-        active_prices = [
-            l.price for l in self._order_to_level.values()
+        active_levels = [
+            l for l in self._order_to_level.values()
             if l.status == GridOrderStatus.ACTIVE
         ]
 
-        if not active_prices:
+        if not active_levels:
             return
 
-        min_active = min(active_prices)
-        max_active = max(active_prices)
+        min_active = min(l.price for l in active_levels)
+        max_active = max(l.price for l in active_levels)
 
-        # Dynamic Expansion Lower: Require price to drop past lowest active level by 1 full spacing step
+        # Deque Window Bounds Check: Must cross 1 full spacing step past bounds
         if self.current_price <= (min_active - 1.0 * self.grid_spacing):
             new_price = round(min_active - self.grid_spacing, self.tick_size)
             if new_price > 0:
                 notional = new_price * self.quantity_per_grid
                 can_place, reason = self.risk_manager.can_place_order(notional, "buy")
                 if can_place:
-                    self.logger.grid(f"⚡ Dynamic Grid Expansion: Appending 1 new BUY level @ ${new_price:,.2f}")
+                    # Deque Eviction: If window size >= max levels, evict highest inactive SELL level
+                    if len(active_levels) >= self.grid_levels_count:
+                        unfilled_sells = [l for l in active_levels if l.side == GridSide.SELL and not l.is_replacement]
+                        if unfilled_sells:
+                            top_sell = max(unfilled_sells, key=lambda l: l.price)
+                            try:
+                                self.client.cancel_order(top_sell.order_id)
+                                top_sell.status = GridOrderStatus.CANCELLED
+                                self._order_to_level.pop(top_sell.order_id, None)
+                                self._known_order_ids.discard(top_sell.order_id)
+                            except Exception:
+                                pass
+
+                    self.logger.grid(f"⚡ Deque O(1) Grid Expansion: Appending 1 BUY level @ ${new_price:,.2f}")
                     order = self.client.place_limit_order(
                         side="BUY",
                         quantity=self.quantity_per_grid,
@@ -369,13 +384,25 @@ class GridEngine:
                         self._order_to_level[order["id"]] = new_level
                         self._known_order_ids.add(order["id"])
 
-        # Dynamic Expansion Upper: Require price to rise past highest active level by 1 full spacing step
         elif self.current_price >= (max_active + 1.0 * self.grid_spacing):
             new_price = round(max_active + self.grid_spacing, self.tick_size)
             notional = new_price * self.quantity_per_grid
             can_place, reason = self.risk_manager.can_place_order(notional, "sell")
             if can_place:
-                self.logger.grid(f"⚡ Dynamic Grid Expansion: Appending 1 new SELL level @ ${new_price:,.2f}")
+                # Deque Eviction: If window size >= max levels, evict lowest inactive BUY level
+                if len(active_levels) >= self.grid_levels_count:
+                    unfilled_buys = [l for l in active_levels if l.side == GridSide.BUY and not l.is_replacement]
+                    if unfilled_buys:
+                        bottom_buy = min(unfilled_buys, key=lambda l: l.price)
+                        try:
+                            self.client.cancel_order(bottom_buy.order_id)
+                            bottom_buy.status = GridOrderStatus.CANCELLED
+                            self._order_to_level.pop(bottom_buy.order_id, None)
+                            self._known_order_ids.discard(bottom_buy.order_id)
+                        except Exception:
+                            pass
+
+                self.logger.grid(f"⚡ Deque O(1) Grid Expansion: Appending 1 SELL level @ ${new_price:,.2f}")
                 order = self.client.place_limit_order(
                     side="SELL",
                     quantity=self.quantity_per_grid,
