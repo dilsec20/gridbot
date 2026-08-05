@@ -114,6 +114,8 @@ class GridEngine:
                     self.grid_spacing = data.get("grid_spacing", self.grid_spacing)
                     self.lowest_buy_price = data.get("lowest_buy_price", 0.0)
                     self.highest_sell_price = data.get("highest_sell_price", 0.0)
+                    if hasattr(self.risk_manager, 'realized_pnl'):
+                        self.risk_manager.realized_pnl = data.get("realized_pnl", 0.0)
                     state_val = data.get("inventory_state", "normal")
                     try:
                         self.inventory_state = InventoryState(state_val)

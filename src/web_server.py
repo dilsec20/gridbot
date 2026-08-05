@@ -777,9 +777,10 @@ def send_stats_update(grid_engine, client, risk_manager):
     except Exception:
         balance = 0
 
-    # Calculate TRUE realized PnL from exchange wallet balance change
-    # This is the most accurate: wallet_balance goes up ONLY when positions close at profit
-    exchange_realized_pnl = balance - risk_manager.initial_balance if risk_manager.initial_balance > 0 else stats['pnl']
+    # Calculate Realized PnL from RiskManager & persisted state
+    exchange_realized_pnl = risk_manager.get_realized_pnl()
+    if exchange_realized_pnl == 0 and risk_manager.initial_balance > 0 and balance > risk_manager.initial_balance:
+        exchange_realized_pnl = balance - risk_manager.initial_balance
 
     pos_info = "No position"
     if position['size'] != 0:
