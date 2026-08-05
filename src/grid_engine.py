@@ -227,6 +227,9 @@ class GridEngine:
                         self.symbol = detected_symbol
                         self.config["symbol"] = detected_symbol
                         self.client.symbol = detected_symbol
+                        # Re-fetch price & symbol info for newly detected symbol
+                        self.current_price = self.client.get_price()
+                        symbol_info = self.client.get_symbol_info()
                         matching_orders = open_orders
 
                 if matching_orders:

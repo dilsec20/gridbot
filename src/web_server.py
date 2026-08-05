@@ -514,6 +514,15 @@ def run_bot(config):
         logger.system("Setting up grid...")
         grid_engine.initialize()
 
+        # Synchronize auto-detected symbol across config & client
+        config['symbol'] = grid_engine.symbol
+        client.symbol = grid_engine.symbol
+        socketio.emit('bot_started', {
+            'symbol': config['symbol'],
+            'use_testnet': config.get('use_testnet', True) and config.get('use_demo', True),
+            'config': config
+        })
+
         # Send initial price and grid state
         try:
             init_price = client.get_price()
