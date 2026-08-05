@@ -399,6 +399,20 @@ function handleBotStarted(data) {
         }
     }
 
+    if (data.config) {
+        const c = data.config;
+        if (c.grid_levels && document.getElementById('gridLevels')) document.getElementById('gridLevels').value = c.grid_levels;
+        if (c.spacing_mode && document.getElementById('spacingMode')) document.getElementById('spacingMode').value = c.spacing_mode;
+        if (c.grid_spacing_percent !== undefined && document.getElementById('spacingStep')) document.getElementById('spacingStep').value = c.grid_spacing_percent;
+        if (c.grid_spacing_usdt !== undefined && document.getElementById('spacingUsdt')) document.getElementById('spacingUsdt').value = c.grid_spacing_usdt;
+        if (c.quantity_per_grid !== undefined && document.getElementById('quantityPerGrid')) document.getElementById('quantityPerGrid').value = c.quantity_per_grid;
+        if (c.leverage !== undefined && document.getElementById('leverageSelect')) document.getElementById('leverageSelect').value = c.leverage;
+        if (c.max_loss_usdt !== undefined && document.getElementById('maxLossInput')) document.getElementById('maxLossInput').value = c.max_loss_usdt;
+        if (c.max_position_usdt !== undefined && document.getElementById('maxPosInput')) document.getElementById('maxPosInput').value = c.max_position_usdt;
+        toggleSpacingMode();
+        updateCalculatedMetrics();
+    }
+
     // Reset price history cleanly for current symbol to avoid chart spikes
     priceHistory = [];
     lastKnownPrice = null;

@@ -272,7 +272,8 @@ def handle_connect():
         is_testnet = bool(current_config.get('use_testnet', False) or current_config.get('use_demo', False))
         emit('bot_started', {
             'symbol': symbol,
-            'use_testnet': is_testnet
+            'use_testnet': is_testnet,
+            'config': current_config
         })
         if shared_grid_engine:
             if shared_grid_engine.current_price:
@@ -432,7 +433,8 @@ def run_bot(config):
         bot_running = True
         socketio.emit('bot_started', {
             'symbol': config['symbol'],
-            'use_testnet': config.get('use_testnet', True) and config.get('use_demo', True)
+            'use_testnet': config.get('use_testnet', True) and config.get('use_demo', True),
+            'config': config
         })
         logger.system(f"Starting Grid Bot: {config['symbol']} (Testnet: {config.get('use_testnet', True)})")
 
