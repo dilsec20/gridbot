@@ -225,23 +225,28 @@ class BinanceClient:
             self.logger.error(f"Failed to close position: {e}")
             return None
 
-    def place_limit_order(self, side: str, quantity: float, price: float) -> dict | None:
+    def place_limit_order(self, side: str, quantity: float, price: float, client_order_id: str | None = None) -> dict | None:
         """
         Place a LIMIT order.
         side: 'buy' or 'sell'
+        Optional client_order_id passed as newClientOrderId to Binance.
         Returns order dict on success, None on failure.
         """
         max_retries = 3
 
         for attempt in range(max_retries):
             try:
+                params = {"timeInForce": "GTC"}
+                if client_order_id:
+                    params["newClientOrderId"] = client_order_id
+
                 order = self.exchange.create_order(
                     symbol=self.symbol,
                     type="limit",
                     side=side,
                     amount=quantity,
                     price=price,
-                    params={"timeInForce": "GTC"},  # Good-Till-Cancelled
+                    params=params,
                 )
 
                 self.logger.trade(side, price, quantity)
