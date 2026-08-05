@@ -325,21 +325,13 @@ class GridEngine:
             self.logger.warn(f"Risk manager blocked replacement order at ${new_price:,.2f}")
 
     def _check_auto_trailing_recenter(self):
-        """Auto-recenter grid levels if market price moves out of active grid bounds.
-        IMPORTANT: Only recenter if open position is zero (or negligible) so we never
-        cancel active take-profit exit orders or realize a loss on open contracts!
+        """Dynamic Incremental Grid Expansion.
+        Instead of cancelling existing grid levels, when price steps out of grid bounds,
+        simply append 1 new grid level in the movement direction!
+        Zero order cancellations = Zero loss realization!
         """
         if not self.is_running or self.current_price <= 0:
             return
-
-        # Do NOT auto-recenter while holding an active open position — let take-profit orders close at profit first!
-        try:
-            pos = self.client.get_position()
-            pos_amount = abs(float(pos.get("amount", 0.0)))
-            if pos_amount > 0.01:
-                return
-        except Exception:
-            pass
 
         active_prices = [
             l.price for l in self._order_to_level.values()
@@ -352,37 +344,56 @@ class GridEngine:
         min_active = min(active_prices)
         max_active = max(active_prices)
 
-        # Trigger recenter if price moves past active grid bounds by 1 spacing step
-        if self.current_price < (min_active - 1.0 * self.grid_spacing) or self.current_price > (max_active + 1.0 * self.grid_spacing):
-            self.logger.grid(
-                f"⚡ Auto-Trailing Engine: Market price (${self.current_price}) moved out of range! "
-                f"Auto-recentering grid levels..."
-            )
-            self.client.cancel_all_orders()
-            self._known_order_ids.clear()
-            self._order_to_level.clear()
-            self.grid_levels.clear()
+        # Dynamic Expansion Lower: Price dropped below lowest active grid level by 1 step
+        if self.current_price < (min_active - 0.9 * self.grid_spacing):
+            new_price = round(min_active - self.grid_spacing, self.tick_size)
+            if new_price > 0:
+                notional = new_price * self.quantity_per_grid
+                can_place, reason = self.risk_manager.can_place_order(notional, "buy")
+                if can_place:
+                    self.logger.grid(f"⚡ Dynamic Grid Expansion: Appending 1 new BUY level @ ${new_price:,.2f}")
+                    order = self.client.place_limit_order(
+                        symbol=self.symbol,
+                        side="BUY",
+                        quantity=self.quantity_per_grid,
+                        price=new_price
+                    )
+                    if order and "id" in order:
+                        new_level = GridLevel(
+                            index=len(self.grid_levels) + 1,
+                            price=new_price,
+                            side=GridSide.BUY,
+                            status=GridOrderStatus.ACTIVE,
+                            order_id=order["id"]
+                        )
+                        self.grid_levels.append(new_level)
+                        self._order_to_level[order["id"]] = new_level
+                        self._known_order_ids.add(order["id"])
 
-            num_buy = self.grid_levels_count // 2
-            num_sell = self.grid_levels_count - num_buy
-
-            if str(self.spacing_mode).lower() == "percent":
-                spacing_pct = self.config.get("grid_spacing_percent", 0.5)
-                self.grid_low = round(self.current_price * (1 - (num_buy * spacing_pct / 100)), self.tick_size)
-                self.grid_high = round(self.current_price * (1 + (num_sell * spacing_pct / 100)), self.tick_size)
-                self.grid_spacing = round(self.current_price * (spacing_pct / 100), self.tick_size)
-
-            for i in range(num_buy):
-                price = round(self.current_price - (num_buy - i) * self.grid_spacing, self.tick_size)
-                level = GridLevel(index=i + 1, price=price, side=GridSide.BUY)
-                self.grid_levels.append(level)
-
-            for i in range(num_sell):
-                price = round(self.current_price + (i + 1) * self.grid_spacing, self.tick_size)
-                level = GridLevel(index=num_buy + i + 1, price=price, side=GridSide.SELL)
-                self.grid_levels.append(level)
-
-            self.grid_levels.sort(key=lambda l: l.price)
+        # Dynamic Expansion Upper: Price rose above highest active grid level by 1 step
+        elif self.current_price > (max_active + 0.9 * self.grid_spacing):
+            new_price = round(max_active + self.grid_spacing, self.tick_size)
+            notional = new_price * self.quantity_per_grid
+            can_place, reason = self.risk_manager.can_place_order(notional, "sell")
+            if can_place:
+                self.logger.grid(f"⚡ Dynamic Grid Expansion: Appending 1 new SELL level @ ${new_price:,.2f}")
+                order = self.client.place_limit_order(
+                    symbol=self.symbol,
+                    side="SELL",
+                    quantity=self.quantity_per_grid,
+                    price=new_price
+                )
+                if order and "id" in order:
+                    new_level = GridLevel(
+                        index=len(self.grid_levels) + 1,
+                        price=new_price,
+                        side=GridSide.SELL,
+                        status=GridOrderStatus.ACTIVE,
+                        order_id=order["id"]
+                    )
+                    self.grid_levels.append(new_level)
+                    self._order_to_level[order["id"]] = new_level
+                    self._known_order_ids.add(order["id"])
             self._place_initial_orders()
 
     def update_price(self, price: float):
