@@ -875,17 +875,6 @@ def main():
     print("  ════════════════════════════════════")
     print()
 
-    # Auto-start bot thread on server launch if valid config exists
-    try:
-        cfg = load_config_file()
-        if cfg and cfg.get('api_key') and not cfg.get('api_key', '').startswith('YOUR_'):
-            print("🚀 Auto-starting Grid Engine on server launch...")
-            bot_stop_event.clear()
-            bot_thread = threading.Thread(target=run_bot, args=(cfg,), daemon=True)
-            bot_thread.start()
-    except Exception as e:
-        print(f"Auto-start info: {e}")
-
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
 
 
