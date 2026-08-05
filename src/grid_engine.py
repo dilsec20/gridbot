@@ -350,8 +350,7 @@ class GridEngine:
         if self.current_price <= (min_active - 1.0 * self.grid_spacing):
             new_price = round(min_active - self.grid_spacing, self.tick_size)
             if new_price > 0:
-                notional = new_price * self.quantity_per_grid
-                can_place, reason = self.risk_manager.can_place_order(notional, "buy")
+                can_place = self.risk_manager.can_place_order("BUY", self.quantity, new_price)
                 if can_place:
                     # Deque Eviction: If window size >= max levels, evict highest inactive SELL level
                     if len(active_levels) >= self.grid_levels_count:
@@ -369,7 +368,7 @@ class GridEngine:
                     self.logger.grid(f"⚡ Deque O(1) Grid Expansion: Appending 1 BUY level @ ${new_price:,.2f}")
                     order = self.client.place_limit_order(
                         side="BUY",
-                        quantity=self.quantity_per_grid,
+                        quantity=self.quantity,
                         price=new_price
                     )
                     if order and "id" in order:
@@ -386,8 +385,7 @@ class GridEngine:
 
         elif self.current_price >= (max_active + 1.0 * self.grid_spacing):
             new_price = round(max_active + self.grid_spacing, self.tick_size)
-            notional = new_price * self.quantity_per_grid
-            can_place, reason = self.risk_manager.can_place_order(notional, "sell")
+            can_place = self.risk_manager.can_place_order("SELL", self.quantity, new_price)
             if can_place:
                 # Deque Eviction: If window size >= max levels, evict lowest inactive BUY level
                 if len(active_levels) >= self.grid_levels_count:
@@ -405,7 +403,7 @@ class GridEngine:
                 self.logger.grid(f"⚡ Deque O(1) Grid Expansion: Appending 1 SELL level @ ${new_price:,.2f}")
                 order = self.client.place_limit_order(
                     side="SELL",
-                    quantity=self.quantity_per_grid,
+                    quantity=self.quantity,
                     price=new_price
                 )
                 if order and "id" in order:
