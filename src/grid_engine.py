@@ -624,10 +624,11 @@ class GridEngine:
                     level.status = GridOrderStatus.TRAILING_TP
                     level.peak_price = current_price
                     callback = self.trailing_tp_callback / 100.0
-                    level.trailing_stop = round(level.peak_price * (1.0 - callback), self.tick_size)
+                    calc_stop = round(level.peak_price * (1.0 - callback), self.tick_size)
+                    level.trailing_stop = max(level.price, calc_stop)
                     self.logger.grid(
                         f"🔥 TRAILING TP ACTIVATED on {self.symbol} @ {fmt_price(current_price)}! "
-                        f"Target: {fmt_price(level.price)} | Trailing Stop: {fmt_price(level.trailing_stop)} "
+                        f"Target: {fmt_price(level.price)} | Trailing Stop Floor: {fmt_price(level.trailing_stop)} "
                         f"(Callback: {self.trailing_tp_callback}%)"
                     )
 
@@ -636,7 +637,8 @@ class GridEngine:
                 if current_price > level.peak_price:
                     level.peak_price = current_price
                     callback = self.trailing_tp_callback / 100.0
-                    level.trailing_stop = round(level.peak_price * (1.0 - callback), self.tick_size)
+                    calc_stop = round(level.peak_price * (1.0 - callback), self.tick_size)
+                    level.trailing_stop = max(level.price, calc_stop)
                     self.logger.grid(
                         f"📈 TRAILING TP PEAK RISING: {self.symbol} reached {fmt_price(current_price)}! "
                         f"New Trailing Stop: {fmt_price(level.trailing_stop)}"
