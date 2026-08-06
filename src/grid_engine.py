@@ -240,11 +240,21 @@ class GridEngine:
                         matching_orders = open_orders
 
                 if matching_orders:
-                    self.logger.grid(f"🔄 Rebuilding Deque state from {len(matching_orders)} live exchange orders for {self.symbol}...")
-                    self._rebuild_from_exchange_orders(matching_orders)
-                    self.is_running = True
-                    self._save_state()
-                    return
+                    if len(matching_orders) >= (self.grid_levels_count - 2):
+                        self.logger.grid(f"🔄 Rebuilding Deque state from {len(matching_orders)} live exchange orders for {self.symbol}...")
+                        self._rebuild_from_exchange_orders(matching_orders)
+                        self.is_running = True
+                        self._save_state()
+                        return
+                    else:
+                        self.logger.grid(f"⚠️ Found only {len(matching_orders)} leftover orders on exchange (expected {self.grid_levels_count}). Cancelling stale orders for fresh grid setup...")
+                        for o in matching_orders:
+                            try:
+                                oid = o.get("id")
+                                if oid:
+                                    self.client.cancel_order(oid)
+                            except Exception:
+                                pass
         except Exception as e:
             self.logger.error(f"Error checking live exchange orders for rebuild: {e}")
 
