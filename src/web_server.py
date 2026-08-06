@@ -141,7 +141,7 @@ def api_market_scanner():
         client = get_shared_client()
         quant = QuantEngine(client)
         
-        target_coins = ['ETH/USDT', 'SOL/USDT', 'HOME/USDT', 'STAR/USDT', 'DOGE/USDT', 'ADA/USDT', '1000PEPE/USDT', 'NEAR/USDT', 'BTC/USDT', 'BNB/USDT', 'AVAX/USDT']
+        target_coins = ['ETH/USDT', 'SOL/USDT', 'HOME/USDT', 'SUI/USDT', 'DOGE/USDT', 'ADA/USDT', '1000PEPE/USDT', 'NEAR/USDT', 'BTC/USDT', 'BNB/USDT', 'AVAX/USDT']
         opportunities = []
 
         for sym in target_coins:
@@ -186,10 +186,10 @@ def api_market_scanner():
                 'est_cycle_roi': 2.56, 'est_cycles_per_hour': 4.5, 'est_daily_return_min': 4.0, 'est_daily_return_max': 8.2
             },
             {
-                'symbol': 'STAR/USDT', 'price': 0.0994, 'score': 90, 'status': 'Excellent', 'status_badge': '🟢 Excellent',
+                'symbol': 'SUI/USDT', 'price': 1.78, 'score': 90, 'status': 'Excellent', 'status_badge': '🟢 Excellent',
                 'stars': '★★★★★', 'ranging_probability': 82, 'atr_percent': 3.5, 'rsi': 51.2, 'adx': 16.5,
-                'grid_levels': 10, 'spacing_mode': 'percent', 'grid_spacing_percent': 1.0, 'grid_spacing_usdt': 0.00099,
-                'quantity': 180.0, 'recommended_leverage': 5, 'max_loss_usdt': 15.0, 'max_position_usdt': 70.0,
+                'grid_levels': 10, 'spacing_mode': 'percent', 'grid_spacing_percent': 1.0, 'grid_spacing_usdt': 0.0178,
+                'quantity': 10.0, 'recommended_leverage': 5, 'max_loss_usdt': 15.0, 'max_position_usdt': 70.0,
                 'est_cycle_roi': 1.1, 'est_cycles_per_hour': 5.0, 'est_daily_return_min': 3.0, 'est_daily_return_max': 6.0
             },
             {
@@ -373,6 +373,8 @@ def handle_start_bot(config):
     current_config['leverage'] = config.get('leverage', 5)
     current_config['max_loss_usdt'] = config.get('max_loss_usdt', 100.0)
     current_config['max_position_usdt'] = config.get('max_position_usdt', 500.0)
+    current_config['trailing_tp_enabled'] = config.get('trailing_tp_enabled', True)
+    current_config['trailing_tp_callback_percent'] = config.get('trailing_tp_callback_percent', 0.5)
 
     # Reset stop event
     bot_stop_event.clear()

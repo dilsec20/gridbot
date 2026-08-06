@@ -28,6 +28,7 @@ class GridOrderStatus(Enum):
     ACTIVE = "active"        # Order is live on exchange
     FILLED = "filled"        # Order was filled
     CANCELLED = "cancelled"  # Order was cancelled
+    TRAILING_TP = "trailing_tp" # Actively trailing higher profits on pump
 
 
 class InventoryState(Enum):
@@ -46,6 +47,8 @@ class GridLevel:
     filled_at: Optional[float] = None
     is_replacement: bool = False  # True = placed after a fill (completes a cycle when filled)
     index: int = 0
+    peak_price: float = 0.0        # Highest price reached during trailing TP
+    trailing_stop: float = 0.0     # Dynamic trailing stop trigger price
 
 
 class GridEngine:
@@ -73,6 +76,10 @@ class GridEngine:
         # Inventory Exposure Configurable Thresholds & State Machine
         self.inventory_bias_limit_ratio = config.get("inventory_bias_limit", 0.65)
         self.inventory_state = InventoryState.NORMAL
+
+        # Dynamic Trailing Take-Profit (Profit Rider)
+        self.trailing_tp_enabled = config.get("trailing_tp_enabled", True)
+        self.trailing_tp_callback = config.get("trailing_tp_callback_percent", 0.5)
 
         # Persistent State File Path
         self.state_file = os.path.join("data", "state.json")
@@ -532,20 +539,21 @@ class GridEngine:
 
             new_price = round(self.lowest_buy_price - self.grid_spacing, self.tick_size)
             if new_price > 0:
-                if self.risk_manager.can_place_order("BUY", self.quantity, new_price):
-                    # Pure O(1) Deque Eviction: Evict top unfilled SELL from right via pop()
-                    if active_count >= self.grid_levels_count and self.grid_levels:
-                        top_sell = self.grid_levels[-1]
-                        if top_sell.side == GridSide.SELL and not top_sell.is_replacement and top_sell.status == GridOrderStatus.ACTIVE:
-                            try:
-                                self.client.cancel_order(top_sell.order_id)
-                                top_sell.status = GridOrderStatus.CANCELLED
-                                self._order_to_level.pop(top_sell.order_id, None)
-                                self._known_order_ids.discard(top_sell.order_id)
-                                self.grid_levels.pop()  # Pure O(1) Right Eviction!
-                            except Exception as e:
-                                self.logger.error(f"Failed to evict top SELL order #{top_sell.order_id}: {e}")
+                # Pure O(1) Deque Eviction: Evict top unfilled SELL FIRST to free margin on exchange
+                if active_count >= self.grid_levels_count and self.grid_levels:
+                    top_sell = self.grid_levels[-1]
+                    if top_sell.side == GridSide.SELL and not top_sell.is_replacement and top_sell.status == GridOrderStatus.ACTIVE:
+                        try:
+                            self.client.cancel_order(top_sell.order_id)
+                            top_sell.status = GridOrderStatus.CANCELLED
+                            self._order_to_level.pop(top_sell.order_id, None)
+                            self._known_order_ids.discard(top_sell.order_id)
+                            self.grid_levels.pop()  # Pure O(1) Right Eviction!
+                            self.logger.grid(f"⚡ Evicted top SELL #{top_sell.order_id} @ ${top_sell.price:,.2f} — Margin freed!")
+                        except Exception as e:
+                            self.logger.error(f"Failed to evict top SELL order #{top_sell.order_id}: {e}")
 
+                if self.risk_manager.can_place_order("BUY", self.quantity, new_price):
                     self.logger.grid(f"⚡ Pure Deque O(1) Expansion: Appending BUY level @ ${new_price:,.2f}")
                     order = self.client.place_limit_order("BUY", self.quantity, new_price)
                     if order and "id" in order:
@@ -566,20 +574,21 @@ class GridEngine:
                 return
 
             new_price = round(self.highest_sell_price + self.grid_spacing, self.tick_size)
-            if self.risk_manager.can_place_order("SELL", self.quantity, new_price):
-                # Pure O(1) Deque Eviction: Evict bottom unfilled BUY from left via popleft()
-                if active_count >= self.grid_levels_count and self.grid_levels:
-                    bottom_buy = self.grid_levels[0]
-                    if bottom_buy.side == GridSide.BUY and not bottom_buy.is_replacement and bottom_buy.status == GridOrderStatus.ACTIVE:
-                        try:
-                            self.client.cancel_order(bottom_buy.order_id)
-                            bottom_buy.status = GridOrderStatus.CANCELLED
-                            self._order_to_level.pop(bottom_buy.order_id, None)
-                            self._known_order_ids.discard(bottom_buy.order_id)
-                            self.grid_levels.popleft()  # Pure O(1) Left Eviction!
-                        except Exception as e:
-                            self.logger.error(f"Failed to evict bottom BUY order #{bottom_buy.order_id}: {e}")
+            # Pure O(1) Deque Eviction: Evict bottom unfilled BUY FIRST to free margin on exchange
+            if active_count >= self.grid_levels_count and self.grid_levels:
+                bottom_buy = self.grid_levels[0]
+                if bottom_buy.side == GridSide.BUY and not bottom_buy.is_replacement and bottom_buy.status == GridOrderStatus.ACTIVE:
+                    try:
+                        self.client.cancel_order(bottom_buy.order_id)
+                        bottom_buy.status = GridOrderStatus.CANCELLED
+                        self._order_to_level.pop(bottom_buy.order_id, None)
+                        self._known_order_ids.discard(bottom_buy.order_id)
+                        self.grid_levels.popleft()  # Pure O(1) Left Eviction!
+                        self.logger.grid(f"⚡ Evicted bottom BUY #{bottom_buy.order_id} @ ${bottom_buy.price:,.2f} — Margin freed!")
+                    except Exception as e:
+                        self.logger.error(f"Failed to evict bottom BUY order #{bottom_buy.order_id}: {e}")
 
+            if self.risk_manager.can_place_order("SELL", self.quantity, new_price):
                 self.logger.grid(f"⚡ Pure Deque O(1) Expansion: Appending SELL level @ ${new_price:,.2f}")
                 order = self.client.place_limit_order("SELL", self.quantity, new_price)
                 if order and "id" in order:
@@ -593,9 +602,60 @@ class GridEngine:
                     self._order_to_level[order["id"]] = new_level
                     self._known_order_ids.add(order["id"])
 
+    def _process_trailing_tp(self, current_price: float):
+        """
+        Dynamic Trailing Take-Profit (Hybrid Profit Rider):
+        When price reaches a SELL target level, instead of capping profit at fixed limit,
+        the level enters TRAILING_TP mode to ride the upward pump as high as possible.
+        Triggers execution when price pulls back by trailing_tp_callback %, locking in maximum asymmetric profit!
+        """
+        if not self.is_running or current_price <= 0:
+            return
+
+        for level in list(self.grid_levels):
+            # 1. Activate trailing TP when price hits or exceeds a SELL target level
+            if level.side == GridSide.SELL and level.status == GridOrderStatus.ACTIVE:
+                if current_price >= level.price:
+                    if level.order_id:
+                        try:
+                            self.client.cancel_order(level.order_id)
+                        except Exception:
+                            pass
+                    level.status = GridOrderStatus.TRAILING_TP
+                    level.peak_price = current_price
+                    callback = self.trailing_tp_callback / 100.0
+                    level.trailing_stop = round(level.peak_price * (1.0 - callback), self.tick_size)
+                    self.logger.grid(
+                        f"🔥 TRAILING TP ACTIVATED on {self.symbol} @ {fmt_price(current_price)}! "
+                        f"Target: {fmt_price(level.price)} | Trailing Stop: {fmt_price(level.trailing_stop)} "
+                        f"(Callback: {self.trailing_tp_callback}%)"
+                    )
+
+            # 2. Update peak price and trailing stop while in TRAILING_TP state
+            elif level.status == GridOrderStatus.TRAILING_TP:
+                if current_price > level.peak_price:
+                    level.peak_price = current_price
+                    callback = self.trailing_tp_callback / 100.0
+                    level.trailing_stop = round(level.peak_price * (1.0 - callback), self.tick_size)
+                    self.logger.grid(
+                        f"📈 TRAILING TP PEAK RISING: {self.symbol} reached {fmt_price(current_price)}! "
+                        f"New Trailing Stop: {fmt_price(level.trailing_stop)}"
+                    )
+
+                # 3. Trigger sell execution when price pulls back below trailing_stop
+                elif current_price <= level.trailing_stop:
+                    extra_profit = max(0.0, (current_price - level.price) * self.quantity)
+                    self.logger.grid(
+                        f"🎯 TRAILING TP TRIGGERED! Captured Peak: {fmt_price(level.peak_price)} | "
+                        f"Exited @ {fmt_price(current_price)} | Trailing Profit Locked: ${extra_profit:+.4f}!"
+                    )
+                    self._handle_fill(level)
+
     def update_price(self, price: float):
         """Update the current market price (from WebSocket or polling)."""
         self.current_price = price
+        if self.trailing_tp_enabled:
+            self._process_trailing_tp(price)
 
     def cancel_all(self):
         """Cancel all active grid orders. Used during shutdown."""

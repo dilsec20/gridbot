@@ -68,6 +68,11 @@ class BotLogger:
         self.trade_count = 0
         self.start_time = datetime.now()
 
+        # Ensure parent log directory exists
+        log_dir = os.path.dirname(os.path.abspath(log_file))
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+
         # Setup file logger
         self._file_logger = logging.getLogger("grid_bot")
         self._file_logger.setLevel(logging.DEBUG)

@@ -164,36 +164,9 @@ class PerformanceTracker:
 
                     recovery_time_ms = round((time.time() - t0) * 1000, 2)
 
-                    # Print structured production reconciliation report
-                    report = (
-                        f"\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"      ORDER RECONCILIATION REPORT\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"Exchange Orders : {len(actual_ids)}\n"
-                        f"Bot Orders      : {len(bot_ids)}\n\n"
-                        f"Ghost Orders    : {len(ghost_in_bot)}\n"
-                        f"Missing Orders  : {len(missing_in_bot)}\n\n"
-                        f"Recovered       : {'YES' if recovered else 'PENDING'}\n"
-                        f"Recovery Time   : {recovery_time_ms} ms\n\n"
-                        f"Affected Order\n"
-                        f"---------------\n"
-                        f"ID     : {affected_id}\n"
-                        f"Side   : {affected_side}\n"
-                        f"Price  : ${affected_price:,.2f}\n"
-                        f"Status : {affected_status}\n\n"
-                        f"Action Taken\n"
-                        f"------------\n"
-                        f"✓ Updated local state\n"
-                        f"✓ Recycled grid level\n"
-                        f"✓ Dashboard refreshed\n\n"
-                        f"Final Result\n"
-                        f"------------\n"
-                        f"Bot State : SYNCED\n"
-                        f"Exchange  : SYNCED\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    self.logger.system(
+                        f"⚡ Order Reconciliation: Synced filled order #{affected_id} ({affected_side} @ ${affected_price:,.2f}) in {recovery_time_ms}ms"
                     )
-                    self.logger.system(report)
                     return False
             else:
                 self._consecutive_desync_count = 0

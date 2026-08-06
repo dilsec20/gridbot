@@ -111,9 +111,25 @@ function populateFormConfig(c) {
     const maxPosEl = document.getElementById('maxPosition') || document.getElementById('maxPositionUsdt');
     if (maxPosEl && c.max_position_usdt !== undefined) maxPosEl.value = c.max_position_usdt;
     
+    if (c.trailing_tp_enabled !== undefined && document.getElementById('tpModeSelect')) {
+        document.getElementById('tpModeSelect').value = c.trailing_tp_enabled ? 'trailing' : 'fixed';
+    }
+    if (c.trailing_tp_callback_percent !== undefined && document.getElementById('trailingCallback')) {
+        document.getElementById('trailingCallback').value = c.trailing_tp_callback_percent;
+    }
+    toggleTpMode();
+
     toggleSpacingMode();
     if (typeof updateCalculatedMetrics === 'function') {
         updateCalculatedMetrics();
+    }
+}
+
+function toggleTpMode() {
+    const select = document.getElementById('tpModeSelect');
+    const group = document.getElementById('trailingCallbackGroup');
+    if (select && group) {
+        group.style.display = select.value === 'trailing' ? 'block' : 'none';
     }
 }
 
@@ -385,6 +401,11 @@ function startBot() {
     let symbol = document.getElementById('symbolSelect').value;
     if (!symbol) symbol = 'BTC/USDT';
 
+    const tpModeSelect = document.getElementById('tpModeSelect');
+    const tpMode = tpModeSelect ? tpModeSelect.value : 'trailing';
+    const trailingCallbackEl = document.getElementById('trailingCallback');
+    const trailingCallback = trailingCallbackEl ? parseFloat(trailingCallbackEl.value) : 0.5;
+
     const config = {
         symbol: symbol,
         spacing_mode: mode,
@@ -395,6 +416,8 @@ function startBot() {
         leverage: parseInt(document.getElementById('leverage').value),
         max_loss_usdt: parseFloat(document.getElementById('maxLoss').value),
         max_position_usdt: parseFloat(document.getElementById('maxPosition').value),
+        trailing_tp_enabled: tpMode === 'trailing',
+        trailing_tp_callback_percent: trailingCallback,
     };
 
     const spacingDesc = mode === 'percent' ? `${config.grid_spacing_percent}%` : `$${config.grid_spacing_usdt}`;

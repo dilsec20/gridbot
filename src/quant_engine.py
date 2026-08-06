@@ -431,7 +431,7 @@ class QuantEngine:
         """
         if symbols is None:
             symbols = [
-                'ETH/USDT', 'SOL/USDT', 'HOME/USDT', 'STAR/USDT', 'DOGE/USDT',
+                'ETH/USDT', 'SOL/USDT', 'HOME/USDT', 'SUI/USDT', 'DOGE/USDT',
                 'ADA/USDT', '1000PEPE/USDT', 'NEAR/USDT', 'BTC/USDT', 'BNB/USDT', 'AVAX/USDT'
             ]
 

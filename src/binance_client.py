@@ -32,6 +32,7 @@ class BinanceClient:
             "options": {
                 "defaultType": "future",
                 "adjustForTimeDifference": True,
+                "recvWindow": 10000,
                 "fetchCurrencies": False,  # Don't call sapi endpoints (not available on testnet)
             },
         }
@@ -62,6 +63,12 @@ class BinanceClient:
             self.logger.system("Mode: DEMO TRADING (paper money)")
 
         self.exchange = ccxt.binance(options)
+
+        # Sync local time with Binance server time
+        try:
+            self.exchange.load_time_difference()
+        except Exception:
+            pass
 
         # Test connection
         try:
