@@ -310,8 +310,8 @@ class QuantEngine:
             except Exception:
                 pass
 
-            # Calculate target margin per grid level so total margin = 90% of wallet equity
-            target_total_margin = balance * 0.90
+            # Calculate target margin per grid level so total margin = 45% of wallet equity (leaves 55% liquid buffer)
+            target_total_margin = balance * 0.45
             target_margin_per_level = target_total_margin / grid_levels if grid_levels > 0 else 10.0
             target_notional_per_level = target_margin_per_level * recommended_leverage
 
