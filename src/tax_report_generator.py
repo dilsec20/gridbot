@@ -213,5 +213,3 @@ class TaxReportGenerator:
             writer.writerow(["Total Trades Executed", num_trades, num_trades])
 
         return self.output_csv
-
-        return self.output_csv

@@ -609,7 +609,7 @@ class GridEngine:
         max_inventory_bias = 500.0
         try:
             pos = self.client.get_position()
-            pos_amount = float(pos.get("amount", 0) or 0)
+            pos_amount = float(pos.get("size", 0) or 0)
             pos_side = str(pos.get("side", "none")).lower()
             if pos_side == "short":
                 pos_amount = -abs(pos_amount)
