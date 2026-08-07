@@ -155,13 +155,42 @@ class RiskManager:
         """Get realized PnL only."""
         return self.realized_pnl
 
-    def get_compounded_quantity(self, current_qty: float, spacing_pct: float = 0.5) -> float:
-        """Calculate compounded order quantity based on realized equity growth."""
+    def get_compounded_quantity(self, base_qty: float, current_price: float = 0.0, grid_levels_count: int = 10) -> float:
+        """
+        Calculate compounded order quantity based on realized equity growth,
+        strictly capped by available liquid wallet balance and configured max_position_usdt limits.
+        """
         try:
-            if self.initial_balance <= 0:
-                return current_qty
-            growth_ratio = max(1.0, (self.initial_balance + max(0.0, self.realized_pnl)) / self.initial_balance)
-            new_qty = round(current_qty * growth_ratio, 6)
-            return max(current_qty, new_qty)
-        except Exception:
-            return current_qty
+            if self.initial_balance <= 0 or base_qty <= 0:
+                return base_qty
+
+            # 1. Calculate growth ratio relative to initial balance
+            realized_gain = max(0.0, self.realized_pnl)
+            growth_ratio = (self.initial_balance + realized_gain) / self.initial_balance
+            target_qty = base_qty * growth_ratio
+
+            # 2. Cap by configured max_position_usdt limit
+            if current_price > 0:
+                max_order_notional = self.max_position_usdt * 0.40
+                max_qty_by_position = max_order_notional / current_price
+                target_qty = min(target_qty, max_qty_by_position)
+
+            # 3. Cap by live liquid wallet margin capacity on Binance
+            try:
+                wallet_balance = float(self.client.get_balance() or self.client.get_wallet_balance() or 0.0)
+                if wallet_balance > 0 and current_price > 0:
+                    leverage = float(self.config.get("leverage", 5) or 5)
+                    max_total_margin = wallet_balance * 0.45
+                    max_margin_per_order = max_total_margin / max(1, grid_levels_count)
+                    max_notional_per_order = max_margin_per_order * leverage
+                    max_qty_by_margin = max_notional_per_order / current_price
+                    target_qty = min(target_qty, max_qty_by_margin)
+            except Exception as e:
+                self.logger.error(f"Failed to fetch balance for compounding cap: {e}")
+
+            final_qty = max(base_qty, round(target_qty, 6))
+            return final_qty
+
+        except Exception as e:
+            self.logger.error(f"Error in get_compounded_quantity: {e}")
+            return base_qty

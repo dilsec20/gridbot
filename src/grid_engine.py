@@ -72,6 +72,7 @@ class GridEngine:
         self.grid_levels_count = config.get("grid_levels", 10)
         self.spacing_mode = config.get("spacing_mode", "usdt")  # 'usdt' or 'percent'
         self.quantity = config.get("quantity_per_grid", 0.001)
+        self.initial_quantity = self.quantity
 
         # Inventory Exposure Configurable Thresholds & State Machine
         self.inventory_bias_limit_ratio = config.get("inventory_bias_limit", 0.65)
@@ -457,11 +458,12 @@ class GridEngine:
                     self.completed_cycles, cycle_pnl, total_pnl, current_balance
                 )
 
-            # Auto-Compounding Check
+            # Auto-Compounding Check: Capped strictly by wallet margin capacity & max_position_usdt
             if self.config.get("auto_compound", True) and self.completed_cycles % 5 == 0:
                 old_qty = self.quantity
+                base_qty = getattr(self, "initial_quantity", self.quantity)
                 self.quantity = self.risk_manager.get_compounded_quantity(
-                    self.quantity, self.config.get("grid_spacing_percent", 0.5)
+                    base_qty, current_price=self.current_price, grid_levels_count=len(self.grid_levels)
                 )
                 if self.quantity != old_qty:
                     self.logger.system(f"💰 Auto-Compounded order size: {old_qty} → {self.quantity}")
