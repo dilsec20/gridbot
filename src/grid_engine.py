@@ -8,6 +8,7 @@ import time
 import json
 import os
 import bisect
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import deque
@@ -102,6 +103,8 @@ class GridEngine:
         # Track order IDs to grid levels for fast O(1) lookup
         self._order_to_level: dict[str, GridLevel] = {}
         self._known_order_ids: set[str] = set()
+        self._fill_lock = threading.Lock()
+        self._processed_fills: set[str] = set()
 
         # Load persistent state if available
         self._load_state()
@@ -118,7 +121,14 @@ class GridEngine:
                         return
 
                     self.completed_cycles = data.get("completed_cycles", 0)
-                    self.quantity = data.get("quantity", self.quantity)
+                    config_qty = self.config.get("quantity_per_grid")
+                    if config_qty and config_qty > 0:
+                        self.quantity = config_qty
+                        self.initial_quantity = config_qty
+                    else:
+                        self.quantity = data.get("quantity", self.quantity)
+                        self.initial_quantity = self.quantity
+
                     self.grid_spacing = data.get("grid_spacing", self.grid_spacing)
                     self.lowest_buy_price = data.get("lowest_buy_price", 0.0)
                     self.highest_sell_price = data.get("highest_sell_price", 0.0)
@@ -413,13 +423,17 @@ class GridEngine:
             self._handle_fill(level)
 
     def _handle_fill(self, filled_level: GridLevel):
-        """Process an order fill and place opposite replacement order to complete cycle."""
-        if not filled_level or filled_level.status == GridOrderStatus.FILLED:
+        """Process an order fill and place opposite replacement order to complete cycle (Thread-Safe Exactly-Once)."""
+        if not filled_level or not filled_level.order_id:
             return
 
-        filled_level.status = GridOrderStatus.FILLED
-        filled_level.filled_at = time.time()
-        self._known_order_ids.discard(filled_level.order_id)
+        with self._fill_lock:
+            if filled_level.order_id in self._processed_fills or filled_level.status == GridOrderStatus.FILLED:
+                return
+            self._processed_fills.add(filled_level.order_id)
+            filled_level.status = GridOrderStatus.FILLED
+            filled_level.filled_at = time.time()
+            self._known_order_ids.discard(filled_level.order_id)
 
         self.logger.trade(filled_level.side.value.upper(), filled_level.price, self.quantity)
 
