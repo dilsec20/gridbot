@@ -139,6 +139,11 @@ class GridEngine:
                         self.inventory_state = InventoryState(state_val)
                     except Exception:
                         self.inventory_state = InventoryState.NORMAL
+
+                    saved_fills = data.get("processed_fills", [])
+                    if isinstance(saved_fills, list):
+                        self._processed_fills.update(str(fid) for fid in saved_fills)
+
                     self.logger.system(f"💾 Loaded persistent snapshot: cycles={self.completed_cycles}, qty={self.quantity}, spacing=${self.grid_spacing}, state={self.inventory_state.value}")
         except Exception as e:
             self.logger.error(f"Error loading state from {self.state_file}: {e}")
@@ -167,6 +172,7 @@ class GridEngine:
                 "inventory_state": self.inventory_state.value,
                 "realized_pnl": self.risk_manager.get_realized_pnl(),
                 "grid_levels_snapshot": deque_snapshot,
+                "processed_fills": list(self._processed_fills),
                 "last_updated": time.time()
             }
             with open(self.state_file, "w") as f:
