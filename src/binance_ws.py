@@ -131,8 +131,16 @@ class BinanceWSClient:
                             order_id = str(order_info.get("i"))
 
                             if order_status in ["FILLED", "PARTIALLY_FILLED"] and execution_type == "TRADE":
+                                fill_data = {
+                                    "order_id": order_id,
+                                    "trade_id": str(order_info.get("t", "")),
+                                    "client_order_id": str(order_info.get("c", "")),
+                                    "status": order_status,
+                                    "price": float(order_info.get("L", 0.0) or order_info.get("p", 0.0)),
+                                    "side": str(order_info.get("S", "")).lower()
+                                }
                                 if self.on_order_fill:
-                                    self.on_order_fill(order_id)
+                                    self.on_order_fill(fill_data)
 
             except asyncio.CancelledError:
                 break

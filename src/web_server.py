@@ -542,8 +542,8 @@ def run_bot(config):
             grid_engine.update_price(price)
             socketio.emit('price_update', {'price': price})
 
-        def handle_ws_fill(order_id):
-            grid_engine.process_order_fill_id(order_id)
+        def handle_ws_fill(fill_data):
+            grid_engine.process_order_fill_id(fill_data)
             send_grid_update(grid_engine)
             send_stats_update(grid_engine, client, risk_manager)
             if perf_tracker:
@@ -563,9 +563,9 @@ def run_bot(config):
         # Wire Telegram to grid cycle completions
         grid_engine.telegram_notifier = tg
         original_handle_fill = handle_ws_fill
-        def handle_ws_fill_with_tg(order_id):
+        def handle_ws_fill_with_tg(fill_data):
             old_cycles = grid_engine.completed_cycles
-            original_handle_fill(order_id)
+            original_handle_fill(fill_data)
             new_cycles = grid_engine.completed_cycles
             if new_cycles > old_cycles:
                 tg.notify_cycle_complete(

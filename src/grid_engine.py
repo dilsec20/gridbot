@@ -418,11 +418,18 @@ class GridEngine:
         except Exception as e:
             self.logger.error(f"Error checking fills: {e}")
 
-    def process_order_fill_id(self, order_id: str):
-        """Process an order fill by order_id."""
-        level = self._order_to_level.get(str(order_id))
+    def process_order_fill_id(self, fill_input):
+        """Process an order fill by order_id or fill_data dictionary."""
+        if isinstance(fill_input, dict):
+            order_id = str(fill_input.get("order_id", ""))
+            fill_info = fill_input
+        else:
+            order_id = str(fill_input)
+            fill_info = {"order_id": order_id}
+
+        level = self._order_to_level.get(order_id)
         if level and level.status == GridOrderStatus.ACTIVE:
-            self._handle_fill(level)
+            self._handle_fill(level, fill_info=fill_info)
 
     def handle_ws_fill(self, fill_data: dict):
         """Instant fill handler triggered directly by Binance WebSocket stream (<50ms)."""
@@ -436,39 +443,49 @@ class GridEngine:
         level = self._order_to_level.get(order_id)
         if level and level.status == GridOrderStatus.ACTIVE:
             self.logger.grid(f"⚡ INSTANT WS FILL DETECTED: Order #{order_id} ({fill_side.upper()} @ {fmt_price(fill_price)})")
-            self._handle_fill(level)
+            self._handle_fill(level, fill_info=fill_data)
 
-    def _handle_fill(self, filled_level: GridLevel):
+    def _handle_fill(self, filled_level: GridLevel, fill_info: Optional[dict] = None):
         """Process an order fill and place opposite replacement order to complete cycle (Thread-Safe Exactly-Once)."""
         if not filled_level or not filled_level.order_id:
             return
+
+        fill_info = fill_info or {}
+        trade_id = str(fill_info.get("trade_id", ""))
+        client_order_id = str(fill_info.get("client_order_id", ""))
 
         with self._fill_lock:
             if filled_level.order_id in self._processed_fills or filled_level.status == GridOrderStatus.FILLED:
                 return
             self._processed_fills.add(filled_level.order_id)
 
-            # Record rich audit entry
+            now = time.time()
             cycle_profit = (self.grid_spacing * self.quantity) if filled_level.is_replacement else 0.0
             audit_entry = {
                 "order_id": filled_level.order_id,
+                "trade_id": trade_id,
+                "client_order_id": client_order_id,
                 "symbol": self.symbol,
                 "side": filled_level.side.value.upper(),
                 "price": filled_level.price,
                 "quantity": self.quantity,
-                "processed_at": time.time(),
+                "processed_at": now,
                 "is_replacement": filled_level.is_replacement,
                 "cycle_pnl": cycle_profit
             }
             self._processed_fills_history.append(audit_entry)
 
-            # Bounded memory pruning to prevent memory growth over long runs
+            # 30-Day Age-Based Retention Pruning + Bounded Memory
+            RETENTION_PERIOD_SECONDS = 30 * 86400  # 30 days
             if len(self._processed_fills) > self.MAX_PROCESSED_FILLS:
-                active_ids = {entry["order_id"] for entry in self._processed_fills_history}
+                active_ids = {
+                    entry["order_id"] for entry in self._processed_fills_history
+                    if (now - entry.get("processed_at", now)) <= RETENTION_PERIOD_SECONDS
+                }
                 self._processed_fills = active_ids
 
             filled_level.status = GridOrderStatus.FILLED
-            filled_level.filled_at = time.time()
+            filled_level.filled_at = now
             self._known_order_ids.discard(filled_level.order_id)
 
         self.logger.trade(filled_level.side.value.upper(), filled_level.price, self.quantity)
