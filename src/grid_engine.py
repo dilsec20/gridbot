@@ -145,21 +145,47 @@ class GridEngine:
                     saved_fills_history = data.get("processed_fills_history", [])
                     if isinstance(saved_fills_history, list):
                         for entry in saved_fills_history:
-                            if isinstance(entry, dict) and "order_id" in entry:
+                            if isinstance(entry, dict):
                                 self._processed_fills_history.append(entry)
-                                self._processed_fills.add(str(entry["order_id"]))
+                                if entry.get("trade_id"):
+                                    self._processed_fills.add(str(entry["trade_id"]))
+                                if entry.get("order_id"):
+                                    self._processed_fills.add(str(entry["order_id"]))
                     else:
                         saved_fills = data.get("processed_fills", [])
                         if isinstance(saved_fills, list):
                             self._processed_fills.update(str(fid) for fid in saved_fills)
 
+                    self._prune_expired_fills()
                     self.logger.system(f"💾 Loaded persistent snapshot: cycles={self.completed_cycles}, qty={self.quantity}, spacing=${self.grid_spacing}, state={self.inventory_state.value}")
         except Exception as e:
             self.logger.error(f"Error loading state from {self.state_file}: {e}")
 
+    def _prune_expired_fills(self, now: Optional[float] = None):
+        """Continuous time-based pruning: Remove entries older than 30 days independently of count."""
+        now = now or time.time()
+        RETENTION_SECONDS = 30 * 86400  # 30 Days
+
+        valid_entries = [
+            e for e in self._processed_fills_history
+            if (now - e.get("processed_at", now)) <= RETENTION_SECONDS
+        ]
+        self._processed_fills_history = deque(valid_entries, maxlen=self.MAX_PROCESSED_FILLS)
+
+        active_keys = set()
+        for e in self._processed_fills_history:
+            if e.get("trade_id"):
+                active_keys.add(str(e["trade_id"]))
+            if e.get("order_id"):
+                active_keys.add(str(e["order_id"]))
+            if e.get("fill_key"):
+                active_keys.add(str(e["fill_key"]))
+        self._processed_fills = active_keys
+
     def _save_state(self):
         """Save persistent bot state snapshot to disk (data/state.json)."""
         try:
+            self._prune_expired_fills()
             os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
             deque_snapshot = [
                 {
@@ -453,16 +479,21 @@ class GridEngine:
         fill_info = fill_info or {}
         trade_id = str(fill_info.get("trade_id", ""))
         client_order_id = str(fill_info.get("client_order_id", ""))
+        fill_key = trade_id if trade_id else str(filled_level.order_id)
 
         with self._fill_lock:
-            if filled_level.order_id in self._processed_fills or filled_level.status == GridOrderStatus.FILLED:
+            # Check trade_id, order_id, and level status for 100% partial fill & exact-once execution safety
+            if fill_key in self._processed_fills or filled_level.order_id in self._processed_fills or filled_level.status == GridOrderStatus.FILLED:
                 return
-            self._processed_fills.add(filled_level.order_id)
+
+            self._processed_fills.add(fill_key)
+            self._processed_fills.add(str(filled_level.order_id))
 
             now = time.time()
             cycle_profit = (self.grid_spacing * self.quantity) if filled_level.is_replacement else 0.0
             audit_entry = {
-                "order_id": filled_level.order_id,
+                "fill_key": fill_key,
+                "order_id": str(filled_level.order_id),
                 "trade_id": trade_id,
                 "client_order_id": client_order_id,
                 "symbol": self.symbol,
@@ -475,14 +506,8 @@ class GridEngine:
             }
             self._processed_fills_history.append(audit_entry)
 
-            # 30-Day Age-Based Retention Pruning + Bounded Memory
-            RETENTION_PERIOD_SECONDS = 30 * 86400  # 30 days
-            if len(self._processed_fills) > self.MAX_PROCESSED_FILLS:
-                active_ids = {
-                    entry["order_id"] for entry in self._processed_fills_history
-                    if (now - entry.get("processed_at", now)) <= RETENTION_PERIOD_SECONDS
-                }
-                self._processed_fills = active_ids
+            # Continuous 30-Day Time-Based Pruning
+            self._prune_expired_fills(now)
 
             filled_level.status = GridOrderStatus.FILLED
             filled_level.filled_at = now
