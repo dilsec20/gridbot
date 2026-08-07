@@ -798,7 +798,6 @@ def send_stats_update(grid_engine, client, risk_manager):
     socketio.emit('stats_update', {
         'realized_pnl': strategy_realized_pnl,
         'actual_cash_pnl': actual_cash_pnl,
-        'strategy_pnl': strategy_realized_pnl,
         'unrealized_pnl': position.get('unrealized_pnl', 0),
         'cycles': stats['cycles'],
         'balance': balance,
