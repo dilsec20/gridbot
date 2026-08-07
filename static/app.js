@@ -593,15 +593,15 @@ function handleTradeUpdate(data) {
 }
 
 function handleStatsUpdate(data) {
-    // Realized PnL (Actual Net Cash Wallet Gain)
+    // Realized PnL (Stable Strategy Cumulative Profit)
     const pnlEl = document.getElementById('realizedPnl');
     const pnl = data.realized_pnl || 0;
     pnlEl.textContent = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(4)}`;
     pnlEl.className = `stat-value ${pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`;
     
-    // Cycle Count & Strategy Cumulative Gross PnL
-    const stratPnl = data.strategy_pnl !== undefined ? data.strategy_pnl : pnl;
-    document.getElementById('pnlCycles').textContent = `${data.cycles || 0} cycles | Strategy: ${stratPnl >= 0 ? '+' : ''}$${stratPnl.toFixed(2)}`;
+    // Cycle Count & Net Cash Added to Binance Wallet
+    const cashPnl = data.actual_cash_pnl !== undefined ? data.actual_cash_pnl : pnl;
+    document.getElementById('pnlCycles').textContent = `${data.cycles || 0} cycles | Cash Added: ${cashPnl >= 0 ? '+' : ''}$${cashPnl.toFixed(2)}`;
 
     // Unrealized PnL
     const upnlEl = document.getElementById('unrealizedPnl');
