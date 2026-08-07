@@ -413,6 +413,9 @@ class GridEngine:
 
     def _handle_fill(self, filled_level: GridLevel):
         """Process an order fill and place opposite replacement order to complete cycle."""
+        if not filled_level or filled_level.status == GridOrderStatus.FILLED:
+            return
+
         filled_level.status = GridOrderStatus.FILLED
         filled_level.filled_at = time.time()
         self._known_order_ids.discard(filled_level.order_id)
