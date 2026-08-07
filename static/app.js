@@ -555,12 +555,15 @@ function handleTradeUpdate(data) {
 }
 
 function handleStatsUpdate(data) {
-    // Realized PnL
+    // Realized PnL (Actual Net Cash Wallet Gain)
     const pnlEl = document.getElementById('realizedPnl');
     const pnl = data.realized_pnl || 0;
     pnlEl.textContent = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(4)}`;
     pnlEl.className = `stat-value ${pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`;
-    document.getElementById('pnlCycles').textContent = `${data.cycles || 0} cycles`;
+    
+    // Cycle Count & Strategy Cumulative Gross PnL
+    const stratPnl = data.strategy_pnl !== undefined ? data.strategy_pnl : pnl;
+    document.getElementById('pnlCycles').textContent = `${data.cycles || 0} cycles | Strategy: ${stratPnl >= 0 ? '+' : ''}$${stratPnl.toFixed(2)}`;
 
     // Unrealized PnL
     const upnlEl = document.getElementById('unrealizedPnl');

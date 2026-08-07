@@ -784,17 +784,20 @@ def send_stats_update(grid_engine, client, risk_manager):
     except Exception:
         balance = 0
 
-    # Calculate Realized PnL from RiskManager & persisted state
-    exchange_realized_pnl = risk_manager.get_realized_pnl()
-    if exchange_realized_pnl == 0 and risk_manager.initial_balance > 0 and balance > risk_manager.initial_balance:
-        exchange_realized_pnl = balance - risk_manager.initial_balance
+    strategy_realized_pnl = risk_manager.get_realized_pnl()
+    
+    # Calculate actual net cash realized growth in Binance wallet
+    actual_cash_pnl = strategy_realized_pnl
+    if risk_manager.initial_balance > 0 and balance > 0:
+        actual_cash_pnl = balance - risk_manager.initial_balance
 
     pos_info = "No position"
     if position['size'] != 0:
         pos_info = f"{position['side'].upper()} {abs(position['size'])} @ {fmt_price(position['entry_price'])}"
 
     socketio.emit('stats_update', {
-        'realized_pnl': exchange_realized_pnl,
+        'realized_pnl': actual_cash_pnl,
+        'strategy_pnl': strategy_realized_pnl,
         'unrealized_pnl': position.get('unrealized_pnl', 0),
         'cycles': stats['cycles'],
         'balance': balance,
