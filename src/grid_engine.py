@@ -100,11 +100,13 @@ class GridEngine:
         self.lowest_buy_price: float = 0.0
         self.highest_sell_price: float = 0.0
 
-        # Track order IDs to grid levels for fast O(1) lookup
+        # Track order IDs to grid levels for fast O(1) lookup & bounded audit tracking
         self._order_to_level: dict[str, GridLevel] = {}
         self._known_order_ids: set[str] = set()
         self._fill_lock = threading.Lock()
         self._processed_fills: set[str] = set()
+        self.MAX_PROCESSED_FILLS = 5000
+        self._processed_fills_history: deque[dict] = deque(maxlen=self.MAX_PROCESSED_FILLS)
 
         # Load persistent state if available
         self._load_state()
@@ -140,9 +142,16 @@ class GridEngine:
                     except Exception:
                         self.inventory_state = InventoryState.NORMAL
 
-                    saved_fills = data.get("processed_fills", [])
-                    if isinstance(saved_fills, list):
-                        self._processed_fills.update(str(fid) for fid in saved_fills)
+                    saved_fills_history = data.get("processed_fills_history", [])
+                    if isinstance(saved_fills_history, list):
+                        for entry in saved_fills_history:
+                            if isinstance(entry, dict) and "order_id" in entry:
+                                self._processed_fills_history.append(entry)
+                                self._processed_fills.add(str(entry["order_id"]))
+                    else:
+                        saved_fills = data.get("processed_fills", [])
+                        if isinstance(saved_fills, list):
+                            self._processed_fills.update(str(fid) for fid in saved_fills)
 
                     self.logger.system(f"💾 Loaded persistent snapshot: cycles={self.completed_cycles}, qty={self.quantity}, spacing=${self.grid_spacing}, state={self.inventory_state.value}")
         except Exception as e:
@@ -173,6 +182,7 @@ class GridEngine:
                 "realized_pnl": self.risk_manager.get_realized_pnl(),
                 "grid_levels_snapshot": deque_snapshot,
                 "processed_fills": list(self._processed_fills),
+                "processed_fills_history": list(self._processed_fills_history),
                 "last_updated": time.time()
             }
             with open(self.state_file, "w") as f:
@@ -437,6 +447,26 @@ class GridEngine:
             if filled_level.order_id in self._processed_fills or filled_level.status == GridOrderStatus.FILLED:
                 return
             self._processed_fills.add(filled_level.order_id)
+
+            # Record rich audit entry
+            cycle_profit = (self.grid_spacing * self.quantity) if filled_level.is_replacement else 0.0
+            audit_entry = {
+                "order_id": filled_level.order_id,
+                "symbol": self.symbol,
+                "side": filled_level.side.value.upper(),
+                "price": filled_level.price,
+                "quantity": self.quantity,
+                "processed_at": time.time(),
+                "is_replacement": filled_level.is_replacement,
+                "cycle_pnl": cycle_profit
+            }
+            self._processed_fills_history.append(audit_entry)
+
+            # Bounded memory pruning to prevent memory growth over long runs
+            if len(self._processed_fills) > self.MAX_PROCESSED_FILLS:
+                active_ids = {entry["order_id"] for entry in self._processed_fills_history}
+                self._processed_fills = active_ids
+
             filled_level.status = GridOrderStatus.FILLED
             filled_level.filled_at = time.time()
             self._known_order_ids.discard(filled_level.order_id)
