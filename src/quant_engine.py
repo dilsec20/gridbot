@@ -181,15 +181,29 @@ class QuantEngine:
             else:
                 book_imbalance = f"Balanced ({bid_ratio_percent}% Buyers)"
 
-            # 8h Funding Rate & Annualized Yield
+            # 8h Funding Rate, Next Settlement Timestamp & Market Impact Bias
             funding_percent = 0.01
             funding_apr_percent = 10.95
             try:
-                funding_rate = self.client.fetch_funding_rate(symbol)
-                funding_percent = round(funding_rate * 100.0, 4)
-                funding_apr_percent = round(funding_percent * 3 * 365.0, 2)
+                if hasattr(self.client, 'fetch_funding_rate'):
+                    funding_rate = self.client.fetch_funding_rate(symbol)
+                    funding_percent = round(funding_rate * 100.0, 4)
+                    funding_apr_percent = round(funding_percent * 3 * 365.0, 2)
             except Exception:
                 pass
+
+            now_ts = int(time.time())
+            next_funding_ts = ((now_ts // 28800) + 1) * 28800  # Next 8h UTC settlement boundary
+
+            if funding_percent > 0:
+                funding_bias = "🔴 Downward Pressure (Longs Pay Shorts)"
+                funding_desc = f"Longs pay Shorts (-{funding_percent}% / 8h). Longs may close positions before settlement."
+            elif funding_percent < 0:
+                funding_bias = "🟢 Upward Squeeze Pump (Shorts Pay Longs)"
+                funding_desc = f"Shorts pay Longs (+{abs(funding_percent)}% / 8h). Shorts may cover to avoid paying yield."
+            else:
+                funding_bias = "⚪ Neutral Funding Rate"
+                funding_desc = "Funding rate is zero (balanced market sentiment)."
 
             # 2. Grid-Optimized AI Suitability Score (0 - 100)
             # High Volatility (ATR 1.5% - 9%) is the FUEL for Grid Profits! Reward it!
@@ -362,6 +376,9 @@ class QuantEngine:
                 "book_imbalance": book_imbalance,
                 "funding_percent": funding_percent,
                 "funding_apr": funding_apr_percent,
+                "funding_next_ts": next_funding_ts,
+                "funding_bias": funding_bias,
+                "funding_desc": funding_desc,
                 "regime": regime,
                 "trend_bias": bias,
                 "bollinger": bb,

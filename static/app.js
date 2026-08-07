@@ -243,6 +243,21 @@ async function applyAiGrid() {
             if (document.getElementById('quantFunding')) {
                 document.getElementById('quantFunding').textContent = data.funding_percent !== undefined ? `+${data.funding_percent}% (+${data.funding_apr}% APR)` : '--';
             }
+            if (data.funding_next_ts) {
+                fundingTargetTimestamp = data.funding_next_ts;
+                updateFundingCountdown();
+            }
+            if (document.getElementById('quantFundingBias')) {
+                const biasEl = document.getElementById('quantFundingBias');
+                biasEl.textContent = data.funding_bias || '--';
+                if (data.funding_percent > 0) {
+                    biasEl.style.color = '#ef4444';
+                } else if (data.funding_percent < 0) {
+                    biasEl.style.color = '#10b981';
+                } else {
+                    biasEl.style.color = '#9ca3af';
+                }
+            }
         }
 
         addLog('system', `🧠 AI Quant Engine analyzed ${symbol}: RSI: ${data.rsi}, ATR: ${data.atr_percent}%, Book: ${data.book_imbalance || 'Balanced'}, Rec. Leverage: ${data.recommended_leverage}x, Spacing: ${data.grid_spacing_percent}%, Qty: ${data.quantity}`);
@@ -250,6 +265,29 @@ async function applyAiGrid() {
         addLog('error', `Failed to get AI Grid parameters: ${e}`);
     }
 }
+
+// ─── Live Funding Settlement Countdown Timer ───
+let fundingTargetTimestamp = 0;
+
+function updateFundingCountdown() {
+    if (!fundingTargetTimestamp) {
+        const now = Math.floor(Date.now() / 1000);
+        fundingTargetTimestamp = (Math.floor(now / 28800) + 1) * 28800;
+    }
+    
+    const nowSec = Math.floor(Date.now() / 1000);
+    const diff = Math.max(0, fundingTargetTimestamp - nowSec);
+    
+    const hours = String(Math.floor(diff / 3600)).padStart(2, '0');
+    const mins = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
+    const secs = String(diff % 60).padStart(2, '0');
+    
+    const countdownEl = document.getElementById('quantFundingCountdown');
+    if (countdownEl) {
+        countdownEl.textContent = `⏱️ ${hours}h ${mins}m ${secs}s`;
+    }
+}
+setInterval(updateFundingCountdown, 1000);
 
 // ═══════════ MARKET RADAR ═══════════
 async function loadMarketRadar() {

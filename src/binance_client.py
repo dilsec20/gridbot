@@ -104,6 +104,22 @@ class BinanceClient:
             self.logger.error(f"Failed to fetch price: {e}")
             raise
 
+    def fetch_funding_rate(self, symbol: str) -> float:
+        """Fetch current 8h funding rate for the specified symbol."""
+        try:
+            if hasattr(self.exchange, 'fetch_funding_rate'):
+                res = self.exchange.fetch_funding_rate(symbol)
+                rate = res.get('fundingRate')
+                if rate is not None:
+                    return float(rate)
+            # Direct REST endpoint fallback
+            funding_info = self.exchange.fapiPublicGetPremiumIndex({'symbol': symbol.replace('/', '')})
+            if funding_info and 'lastFundingRate' in funding_info:
+                return float(funding_info['lastFundingRate'])
+        except Exception:
+            pass
+        return 0.0001
+
     def get_balance(self) -> float:
         """Get total USDT margin balance (Equity) with resilient failover cache."""
         try:
