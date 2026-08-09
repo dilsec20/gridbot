@@ -1,218 +1,71 @@
 {
-  "symbol": "HOME/USDT:USDT",
-  "completed_cycles": 1,
-  "quantity": 125906.0,
-  "grid_spacing": 2.7e-05,
-  "lowest_buy_price": 0.008816,
-  "highest_sell_price": 0.009194,
+  "symbol": "AVAX/USDT",
+  "completed_cycles": 0,
+  "quantity": 596.27,
+  "grid_spacing": 0.003,
+  "lowest_buy_price": 6.527,
+  "highest_sell_price": 6.527,
   "inventory_state": "normal",
-  "realized_pnl": 3.3994619999999998,
+  "realized_pnl": 0.0,
   "grid_levels_snapshot": [
     {
-      "price": 0.008816,
+      "price": 6.515,
       "side": "buy",
       "status": "active",
-      "order_id": "270369305",
+      "order_id": "512257268",
       "is_replacement": false
     },
     {
-      "price": 0.008843,
+      "price": 6.518,
       "side": "buy",
       "status": "active",
-      "order_id": "270369314",
+      "order_id": "512257279",
       "is_replacement": false
     },
     {
-      "price": 0.00887,
+      "price": 6.521,
       "side": "buy",
       "status": "active",
-      "order_id": "270369330",
+      "order_id": "512257287",
       "is_replacement": false
     },
     {
-      "price": 0.008897,
+      "price": 6.524,
       "side": "buy",
       "status": "active",
-      "order_id": "270369334",
+      "order_id": "512257296",
       "is_replacement": false
     },
     {
-      "price": 0.008924,
-      "side": "buy",
-      "status": "active",
-      "order_id": "270369341",
-      "is_replacement": false
-    },
-    {
-      "price": 0.008951,
-      "side": "buy",
-      "status": "active",
-      "order_id": "270369348",
-      "is_replacement": false
-    },
-    {
-      "price": 0.008978,
-      "side": "buy",
-      "status": "active",
-      "order_id": "270369352",
-      "is_replacement": false
-    },
-    {
-      "price": 0.009005,
-      "side": "buy",
-      "status": "active",
-      "order_id": "270371186",
-      "is_replacement": true
-    },
-    {
-      "price": 0.009032,
-      "side": "buy",
-      "status": "active",
-      "order_id": "270371834",
-      "is_replacement": true
-    },
-    {
-      "price": 0.009032,
-      "side": "sell",
-      "status": "filled",
-      "order_id": "270369357",
-      "is_replacement": false
-    },
-    {
-      "price": 0.009059,
-      "side": "buy",
-      "status": "active",
-      "order_id": "270373121",
-      "is_replacement": true
-    },
-    {
-      "price": 0.009059,
-      "side": "sell",
-      "status": "filled",
-      "order_id": "270369362",
-      "is_replacement": false
-    },
-    {
-      "price": 0.009086,
-      "side": "buy",
-      "status": "filled",
-      "order_id": "270374005",
-      "is_replacement": true
-    },
-    {
-      "price": 0.009086,
-      "side": "sell",
-      "status": "filled",
-      "order_id": "270369369",
-      "is_replacement": false
-    },
-    {
-      "price": 0.009113,
-      "side": "sell",
-      "status": "filled",
-      "order_id": "270369372",
-      "is_replacement": false
-    },
-    {
-      "price": 0.00914,
+      "price": 6.53,
       "side": "sell",
       "status": "active",
-      "order_id": "270369381",
+      "order_id": "512257310",
       "is_replacement": false
     },
     {
-      "price": 0.009167,
+      "price": 6.533,
       "side": "sell",
       "status": "active",
-      "order_id": "270369384",
+      "order_id": "512257314",
       "is_replacement": false
     },
     {
-      "price": 0.009194,
+      "price": 6.536,
       "side": "sell",
       "status": "active",
-      "order_id": "270369390",
+      "order_id": "512257325",
+      "is_replacement": false
+    },
+    {
+      "price": 6.539,
+      "side": "sell",
+      "status": "active",
+      "order_id": "512257335",
       "is_replacement": false
     }
   ],
-  "processed_fills": [
-    "270369372",
-    "270369357",
-    "270369369",
-    "57838764",
-    "57841284",
-    "270369362",
-    "57840278",
-    "270374005",
-    "57839121",
-    "57839836"
-  ],
-  "processed_fills_history": [
-    {
-      "fill_key": "57838764",
-      "order_id": "270369357",
-      "trade_id": "57838764",
-      "client_order_id": "x-cvBPrNm9c6923c603dce87ca6097c7",
-      "symbol": "HOME/USDT:USDT",
-      "side": "SELL",
-      "price": 0.009032,
-      "quantity": 125906.0,
-      "processed_at": 1786135319.6410692,
-      "is_replacement": false,
-      "cycle_pnl": 0.0
-    },
-    {
-      "fill_key": "57839121",
-      "order_id": "270369362",
-      "trade_id": "57839121",
-      "client_order_id": "x-cvBPrNm9edee630102f834f55ed5c7",
-      "symbol": "HOME/USDT:USDT",
-      "side": "SELL",
-      "price": 0.009059,
-      "quantity": 125906.0,
-      "processed_at": 1786135395.8184848,
-      "is_replacement": false,
-      "cycle_pnl": 0.0
-    },
-    {
-      "fill_key": "57839836",
-      "order_id": "270369369",
-      "trade_id": "57839836",
-      "client_order_id": "x-cvBPrNm90933de14d06404f2bcd9e1",
-      "symbol": "HOME/USDT:USDT",
-      "side": "SELL",
-      "price": 0.009086,
-      "quantity": 125906.0,
-      "processed_at": 1786135562.0240152,
-      "is_replacement": false,
-      "cycle_pnl": 0.0
-    },
-    {
-      "fill_key": "57840278",
-      "order_id": "270369372",
-      "trade_id": "57840278",
-      "client_order_id": "x-cvBPrNm9dd91e34c3f5014e400635f",
-      "symbol": "HOME/USDT:USDT",
-      "side": "SELL",
-      "price": 0.009113,
-      "quantity": 125906.0,
-      "processed_at": 1786135630.675114,
-      "is_replacement": false,
-      "cycle_pnl": 0.0
-    },
-    {
-      "fill_key": "57841284",
-      "order_id": "270374005",
-      "trade_id": "57841284",
-      "client_order_id": "x-cvBPrNm97577f8f744e4def7f459ba",
-      "symbol": "HOME/USDT:USDT",
-      "side": "BUY",
-      "price": 0.009086,
-      "quantity": 125906.0,
-      "processed_at": 1786135985.5498157,
-      "is_replacement": true,
-      "cycle_pnl": 3.3994619999999998
-    }
-  ],
-  "last_updated": 1786135985.7234895
+  "processed_fills": [],
+  "processed_fills_history": [],
+  "last_updated": 1786215715.1239836
 }

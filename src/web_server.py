@@ -15,7 +15,7 @@ from pathlib import Path
 # Add src directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, request, Response
 from flask_socketio import SocketIO, emit
 
 from logger import BotLogger, fmt_price
@@ -42,6 +42,41 @@ socketio = SocketIO(
     ping_interval=25,
     max_http_buffer_size=10000000
 )
+
+
+# ═══════════ Security & Authentication ═══════════
+def check_dashboard_auth(username, password):
+    try:
+        config = load_config_file()
+    except Exception:
+        config = {}
+    
+    if not config.get("dashboard_auth_enabled", True):
+        return True
+        
+    expected_user = config.get("dashboard_username", "admin")
+    expected_pass = config.get("dashboard_password", "admin123")
+    return str(username) == str(expected_user) and str(password) == str(expected_pass)
+
+def prompt_dashboard_auth():
+    return Response(
+        '🔒 Access Denied: Authentication required to access GridBot Dashboard.\n', 401,
+        {'WWW-Authenticate': 'Basic realm="GridBot Secure Dashboard"'}
+    )
+
+@app.before_request
+def enforce_dashboard_security():
+    try:
+        config = load_config_file()
+        if not config.get("dashboard_auth_enabled", True):
+            return None
+    except Exception:
+        pass
+
+    auth = request.authorization
+    if not auth or not check_dashboard_auth(auth.username, auth.password):
+        return prompt_dashboard_auth()
+
 
 # ─── Global State & Cache ───
 bot_thread = None
