@@ -44,8 +44,48 @@ socketio = SocketIO(
 )
 
 
-# ═══════════ Security & Authentication ═══════════
+# ═══════════ Security & Authentication (Anti-Brute-Force) ═══════════
+_failed_login_attempts = {}   # { ip_addr: { 'count': int, 'blocked_until': float } }
+_auth_lock = threading.Lock()
+_MAX_FAILED_ATTEMPTS = 3
+_LOCKOUT_SECONDS = 600  # 10 minutes
+
+def _get_client_ip():
+    """Get real client IP, respecting reverse proxy headers."""
+    return request.headers.get('X-Forwarded-For', request.headers.get('X-Real-IP', request.remote_addr))
+
+def _is_ip_blocked(ip):
+    """Check if an IP is currently locked out due to failed login attempts."""
+    with _auth_lock:
+        record = _failed_login_attempts.get(ip)
+        if not record:
+            return False
+        if record['count'] >= _MAX_FAILED_ATTEMPTS:
+            if time.time() < record['blocked_until']:
+                return True
+            else:
+                # Lockout expired — reset the counter
+                del _failed_login_attempts[ip]
+                return False
+        return False
+
+def _record_failed_login(ip):
+    """Record a failed login attempt and block IP after 3 failures."""
+    with _auth_lock:
+        record = _failed_login_attempts.get(ip, {'count': 0, 'blocked_until': 0})
+        record['count'] += 1
+        if record['count'] >= _MAX_FAILED_ATTEMPTS:
+            record['blocked_until'] = time.time() + _LOCKOUT_SECONDS
+        _failed_login_attempts[ip] = record
+
+def _clear_failed_logins(ip):
+    """Clear failed login counter on successful authentication."""
+    with _auth_lock:
+        if ip in _failed_login_attempts:
+            del _failed_login_attempts[ip]
+
 def check_dashboard_auth(username, password):
+    """Verify dashboard credentials against config.json settings."""
     try:
         config = load_config_file()
     except Exception:
@@ -58,14 +98,17 @@ def check_dashboard_auth(username, password):
     expected_pass = config.get("dashboard_password", "admin123")
     return str(username) == str(expected_user) and str(password) == str(expected_pass)
 
-def prompt_dashboard_auth():
+def prompt_dashboard_auth(message='🔒 Authentication required to access GridBot Dashboard.\n'):
+    """Return 401 response prompting browser Basic Auth dialog."""
     return Response(
-        '🔒 Access Denied: Authentication required to access GridBot Dashboard.\n', 401,
+        message, 401,
         {'WWW-Authenticate': 'Basic realm="GridBot Secure Dashboard"'}
     )
 
 @app.before_request
 def enforce_dashboard_security():
+    """Enforce password authentication with IP-based brute force protection."""
+    # Check if auth is disabled in config
     try:
         config = load_config_file()
         if not config.get("dashboard_auth_enabled", True):
@@ -73,9 +116,43 @@ def enforce_dashboard_security():
     except Exception:
         pass
 
+    client_ip = _get_client_ip()
+
+    # Check if this IP is currently blocked
+    if _is_ip_blocked(client_ip):
+        with _auth_lock:
+            record = _failed_login_attempts.get(client_ip, {})
+            remaining = int(record.get('blocked_until', 0) - time.time())
+            remaining = max(remaining, 0)
+        return Response(
+            f'🚫 IP BLOCKED: Too many failed login attempts.\n'
+            f'⏱️ Try again in {remaining // 60}m {remaining % 60}s.\n',
+            429,
+            {'Retry-After': str(remaining)}
+        )
+
     auth = request.authorization
     if not auth or not check_dashboard_auth(auth.username, auth.password):
+        if auth:
+            # They submitted credentials but they were wrong
+            _record_failed_login(client_ip)
+            with _auth_lock:
+                record = _failed_login_attempts.get(client_ip, {'count': 0})
+                attempts_left = _MAX_FAILED_ATTEMPTS - record['count']
+            if attempts_left <= 0:
+                return Response(
+                    f'🚫 IP BLOCKED: {_MAX_FAILED_ATTEMPTS} failed attempts.\n'
+                    f'⏱️ Try again in 10 minutes.\n',
+                    429,
+                    {'Retry-After': str(_LOCKOUT_SECONDS)}
+                )
+            return prompt_dashboard_auth(
+                f'❌ Wrong credentials. {attempts_left} attempt(s) remaining before 10-minute lockout.\n'
+            )
         return prompt_dashboard_auth()
+    
+    # Successful login — clear any failed attempts for this IP
+    _clear_failed_logins(client_ip)
 
 
 # ─── Global State & Cache ───
