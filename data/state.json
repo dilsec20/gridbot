@@ -1,71 +1,71 @@
 {
-  "symbol": "AVAX/USDT",
+  "symbol": "SOL/USDT",
   "completed_cycles": 0,
-  "quantity": 596.27,
-  "grid_spacing": 0.003,
-  "lowest_buy_price": 6.527,
-  "highest_sell_price": 6.527,
+  "quantity": 51.042,
+  "grid_spacing": 0.11,
+  "lowest_buy_price": 76.27,
+  "highest_sell_price": 76.27,
   "inventory_state": "normal",
   "realized_pnl": 0.0,
   "grid_levels_snapshot": [
     {
-      "price": 6.515,
+      "price": 75.83,
       "side": "buy",
       "status": "active",
-      "order_id": "512257268",
+      "order_id": "4179407130",
       "is_replacement": false
     },
     {
-      "price": 6.518,
+      "price": 75.94,
       "side": "buy",
       "status": "active",
-      "order_id": "512257279",
+      "order_id": "4179407139",
       "is_replacement": false
     },
     {
-      "price": 6.521,
+      "price": 76.05,
       "side": "buy",
       "status": "active",
-      "order_id": "512257287",
+      "order_id": "4179407162",
       "is_replacement": false
     },
     {
-      "price": 6.524,
+      "price": 76.16,
       "side": "buy",
       "status": "active",
-      "order_id": "512257296",
+      "order_id": "4179407166",
       "is_replacement": false
     },
     {
-      "price": 6.53,
+      "price": 76.38,
       "side": "sell",
       "status": "active",
-      "order_id": "512257310",
+      "order_id": "4179407171",
       "is_replacement": false
     },
     {
-      "price": 6.533,
+      "price": 76.49,
       "side": "sell",
       "status": "active",
-      "order_id": "512257314",
+      "order_id": "4179407182",
       "is_replacement": false
     },
     {
-      "price": 6.536,
+      "price": 76.6,
       "side": "sell",
       "status": "active",
-      "order_id": "512257325",
+      "order_id": "4179407209",
       "is_replacement": false
     },
     {
-      "price": 6.539,
+      "price": 76.71,
       "side": "sell",
       "status": "active",
-      "order_id": "512257335",
+      "order_id": "4179407212",
       "is_replacement": false
     }
   ],
   "processed_fills": [],
   "processed_fills_history": [],
-  "last_updated": 1786215715.1239836
+  "last_updated": 1786265403.549547
 }

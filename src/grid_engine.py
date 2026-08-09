@@ -29,7 +29,8 @@ class GridOrderStatus(Enum):
     ACTIVE = "active"        # Order is live on exchange
     FILLED = "filled"        # Order was filled
     CANCELLED = "cancelled"  # Order was cancelled
-    TRAILING_TP = "trailing_tp" # Actively trailing higher profits on pump
+    TRAILING_TP = "trailing_tp"   # Actively trailing higher profits on pump (SELL side)
+    TRAILING_BUY = "trailing_buy" # Actively trailing lower entry on dip (BUY side)
 
 
 class InventoryState(Enum):
@@ -48,8 +49,10 @@ class GridLevel:
     filled_at: Optional[float] = None
     is_replacement: bool = False  # True = placed after a fill (completes a cycle when filled)
     index: int = 0
-    peak_price: float = 0.0        # Highest price reached during trailing TP
-    trailing_stop: float = 0.0     # Dynamic trailing stop trigger price
+    peak_price: float = 0.0        # Highest price reached during trailing TP (SELL side)
+    trailing_stop: float = 0.0     # Dynamic trailing stop trigger price (SELL side)
+    trough_price: float = 0.0      # Lowest price reached during trailing BUY (BUY side)
+    trailing_bounce: float = 0.0   # Dynamic trailing bounce trigger price (BUY side)
 
 
 class GridEngine:
@@ -760,11 +763,63 @@ class GridEngine:
                     )
                     self._handle_fill(level)
 
+    def _process_trailing_buy(self, current_price: float):
+        """
+        Dynamic Trailing Buy (Mirror of Trailing TP for BUY side):
+        When price drops to a BUY target level, instead of buying immediately at fixed price,
+        the level enters TRAILING_BUY mode to ride the dip as low as possible.
+        Triggers execution when price bounces up by trailing_tp_callback %, locking in cheapest entry!
+        """
+        if not self.is_running or current_price <= 0:
+            return
+
+        for level in list(self.grid_levels):
+            # 1. Activate trailing BUY when price drops to or below a BUY target level
+            if level.side == GridSide.BUY and level.status == GridOrderStatus.ACTIVE:
+                if current_price <= level.price:
+                    if level.order_id:
+                        try:
+                            self.client.cancel_order(level.order_id)
+                        except Exception:
+                            pass
+                    level.status = GridOrderStatus.TRAILING_BUY
+                    level.trough_price = current_price
+                    callback = self.trailing_tp_callback / 100.0
+                    calc_bounce = round(level.trough_price * (1.0 + callback), self.tick_size)
+                    level.trailing_bounce = min(level.price, calc_bounce)
+                    self.logger.grid(
+                        f"📉 TRAILING BUY ACTIVATED on {self.symbol} @ {fmt_price(current_price)}! "
+                        f"Target: {fmt_price(level.price)} | Trailing Bounce Ceiling: {fmt_price(level.trailing_bounce)} "
+                        f"(Callback: {self.trailing_tp_callback}%)"
+                    )
+
+            # 2. Update trough price and trailing bounce while in TRAILING_BUY state
+            elif level.status == GridOrderStatus.TRAILING_BUY:
+                if current_price < level.trough_price:
+                    level.trough_price = current_price
+                    callback = self.trailing_tp_callback / 100.0
+                    calc_bounce = round(level.trough_price * (1.0 + callback), self.tick_size)
+                    level.trailing_bounce = min(level.price, calc_bounce)
+                    self.logger.grid(
+                        f"📉 TRAILING BUY DIP DEEPENING: {self.symbol} dropped to {fmt_price(current_price)}! "
+                        f"New Trailing Bounce: {fmt_price(level.trailing_bounce)}"
+                    )
+
+                # 3. Trigger buy execution when price bounces up above trailing_bounce
+                elif current_price >= level.trailing_bounce:
+                    savings = max(0.0, (level.price - current_price) * self.quantity)
+                    self.logger.grid(
+                        f"🎯 TRAILING BUY TRIGGERED! Captured Trough: {fmt_price(level.trough_price)} | "
+                        f"Bought @ {fmt_price(current_price)} | Entry Savings: ${savings:+.4f}!"
+                    )
+                    self._handle_fill(level)
+
     def update_price(self, price: float):
         """Update the current market price (from WebSocket or polling)."""
         self.current_price = price
         if self.trailing_tp_enabled:
             self._process_trailing_tp(price)
+            self._process_trailing_buy(price)
 
     def cancel_all(self):
         """Cancel all active grid orders. Used during shutdown."""
@@ -815,6 +870,8 @@ class GridEngine:
                 GridOrderStatus.FILLED: "✅",
                 GridOrderStatus.PENDING: "⏳",
                 GridOrderStatus.CANCELLED: "❌",
+                GridOrderStatus.TRAILING_TP: "🔥",
+                GridOrderStatus.TRAILING_BUY: "📉",
             }.get(level.status, "❓")
             self.logger.grid(
                 f"  {status_icon} {level.side.value.upper()} @ ${level.price:,.4f} "
