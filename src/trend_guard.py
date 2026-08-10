@@ -16,13 +16,13 @@ from typing import Optional
 from quant_engine import calculate_rsi, calculate_adx, calculate_atr
 
 
-# Trend Guard Thresholds (Disabled auto-pause so 100% of grid levels fill freely on dips)
-ADX_PAUSE_THRESHOLD = 999      # Auto-pause disabled (set to 999) to allow all grid orders to fill
-ADX_RESUME_THRESHOLD = 30      # Resume threshold default
-RSI_OVERBOUGHT = 99            # Auto-pause disabled
-RSI_OVERSOLD = 1               # Auto-pause disabled
-RSI_SAFE_HIGH = 75             # Resume if RSI drops below 75
-RSI_SAFE_LOW = 25              # Resume if RSI rises above 25
+# Trend Guard Thresholds (Anti-Trend Protection Active)
+ADX_PAUSE_THRESHOLD = 40.0     # Auto-pause grid when ADX > 40 (strong trending market)
+ADX_RESUME_THRESHOLD = 30.0     # Resume grid when ADX drops below 30
+RSI_OVERBOUGHT = 75.0          # Auto-pause grid when RSI > 75 (extreme overbought pump)
+RSI_OVERSOLD = 25.0            # Auto-pause grid when RSI < 25 (extreme oversold crash)
+RSI_SAFE_HIGH = 70.0           # Resume if RSI drops below 70
+RSI_SAFE_LOW = 30.0            # Resume if RSI rises above 30
 
 # Dynamic Spacing Thresholds
 ATR_NORMAL_LOW = 1.0           # Normal ATR % range lower bound
