@@ -65,9 +65,10 @@ class TrendGuard:
         self.last_atr_percent = 2.0
         self.current_spacing_multiplier = 1.0
 
-        # Real-Time Price Spike Shield
+        # Real-Time Price Spike Shield & Emergency Exposure Control
         self.grid_start_price = None      # Set when grid starts
         self.spike_paused = False         # Separate flag for spike-based pause
+        self.is_emergency = False         # True when extreme displacement requires 50% position trim
 
         # History for dynamic spacing
         self.atr_history = []
@@ -179,28 +180,38 @@ class TrendGuard:
         """
         REAL-TIME Price Spike Shield — runs every cycle (no candle delay!).
         
-        Instantly detects if price has moved >5% from grid start price.
-        This catches sudden whale pumps/crashes that 1-hour ADX candles would miss.
+        Calculates ATR-Adaptive Displacement Threshold: max(3.0%, min(10.0%, 2.5 * ATR%)).
+        If deviation > threshold → GRID_PAUSED.
+        If deviation > 1.5 * threshold → EMERGENCY EXPOSURE CONTROL (signals 50% position trim!).
         """
         if self.grid_start_price is None or self.grid_start_price <= 0:
-            return {'spike_detected': False, 'spike_resumed': False, 'deviation_pct': 0.0}
+            return {'spike_detected': False, 'emergency_detected': False, 'spike_resumed': False, 'deviation_pct': 0.0, 'threshold_pct': 5.0}
 
         deviation_pct = abs(current_price - self.grid_start_price) / self.grid_start_price * 100.0
 
+        # ATR-adaptive threshold (e.g., BTC=3.0%, HOME=7.85%)
+        atr_mult = max(3.0, min(10.0, round(2.5 * self.last_atr_percent, 2)))
+        emergency_threshold = round(atr_mult * 1.5, 2)
+
         spike_detected = False
+        emergency_detected = False
         spike_resumed = False
 
-        if deviation_pct > PRICE_SPIKE_THRESHOLD and not self.spike_paused:
+        if deviation_pct > atr_mult and not self.spike_paused:
             spike_detected = True
             self.spike_paused = True
-        elif deviation_pct < PRICE_SPIKE_RESUME and self.spike_paused:
+            if deviation_pct > emergency_threshold:
+                emergency_detected = True
+        elif deviation_pct < (atr_mult * 0.6) and self.spike_paused:
             spike_resumed = True
             self.spike_paused = False
 
         return {
             'spike_detected': spike_detected,
+            'emergency_detected': emergency_detected,
             'spike_resumed': spike_resumed,
             'deviation_pct': round(deviation_pct, 2),
+            'threshold_pct': atr_mult,
         }
 
     def process(self, symbol: str, current_price: float = 0.0) -> str:
@@ -219,15 +230,21 @@ class TrendGuard:
             if spike['spike_detected'] and not self.is_paused:
                 self.is_paused = True
                 self.pause_reason = f"⚡ PRICE SPIKE! {spike['deviation_pct']:.1f}% from grid start"
+                if spike.get('emergency_detected'):
+                    self.is_emergency = True
+                    self.pause_reason = f"🚨 EXTREME SPIKE! {spike['deviation_pct']:.1f}% displacement (EMERGENCY)"
+
                 self.logger.risk(
                     f"🛡️ PRICE SPIKE SHIELD ACTIVATED! Price moved {spike['deviation_pct']:.1f}% "
-                    f"from grid start (${self.grid_start_price:.6f} → ${current_price:.6f}) — "
-                    f"Grid PAUSED INSTANTLY to prevent position escalation!"
+                    f"from grid start (${self.grid_start_price:.6f} → ${current_price:.6f}, threshold: {spike['threshold_pct']}%) — "
+                    f"Grid PAUSED INSTANTLY to prevent position escalation! "
+                    f"(Emergency Trim Active: {self.is_emergency})"
                 )
                 if self.socketio:
                     self.socketio.emit('trend_guard_update', {
                         'paused': True,
                         'reason': self.pause_reason,
+                        'emergency': self.is_emergency,
                         'adx': self.last_adx,
                         'rsi': self.last_rsi,
                         'atr_percent': self.last_atr_percent,
@@ -237,6 +254,7 @@ class TrendGuard:
             elif spike['spike_resumed'] and self.is_paused and self.spike_paused is False:
                 # Price came back within safe range
                 self.is_paused = False
+                self.is_emergency = False
                 self.pause_reason = ""
                 self.logger.system(
                     f"🛡️ PRICE SPIKE CLEARED: Price returned to {spike['deviation_pct']:.1f}% "
@@ -246,6 +264,7 @@ class TrendGuard:
                     self.socketio.emit('trend_guard_update', {
                         'paused': False,
                         'reason': 'Price spike cleared',
+                        'emergency': False,
                         'adx': self.last_adx,
                         'rsi': self.last_rsi,
                         'atr_percent': self.last_atr_percent,
@@ -267,6 +286,7 @@ class TrendGuard:
                 self.socketio.emit('trend_guard_update', {
                     'paused': True,
                     'reason': result['regime'],
+                    'emergency': self.is_emergency,
                     'adx': result['adx'],
                     'rsi': result['rsi'],
                     'atr_percent': result['atr_percent'],
@@ -274,6 +294,7 @@ class TrendGuard:
 
         elif result['should_resume'] and self.is_paused and not self.spike_paused:
             self.is_paused = False
+            self.is_emergency = False
             self.pause_reason = ""
             self.logger.system(
                 f"🛡️ TREND GUARD CLEARED: Market conditions normalized! "
@@ -283,6 +304,7 @@ class TrendGuard:
                 self.socketio.emit('trend_guard_update', {
                     'paused': False,
                     'reason': 'Market normalized',
+                    'emergency': False,
                     'adx': result['adx'],
                     'rsi': result['rsi'],
                     'atr_percent': result['atr_percent'],
@@ -303,6 +325,7 @@ class TrendGuard:
         """Get current trend guard status for dashboard."""
         return {
             'paused': self.is_paused,
+            'emergency': self.is_emergency,
             'reason': self.pause_reason,
             'adx': self.last_adx,
             'rsi': self.last_rsi,

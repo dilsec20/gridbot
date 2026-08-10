@@ -665,7 +665,9 @@ def run_bot(config):
 
         # ─── Initialize Trend Guard (Anti-Trend Protection + Dynamic Spacing) ───
         trend_guard = TrendGuard(client, logger, socketio)
-        logger.system("🛡️ Trend Guard initialized — Anti-trend protection active (ADX > 40 / RSI extremes)")
+        initial_start_price = grid_engine.current_price or client.get_price()
+        trend_guard.set_grid_start_price(initial_start_price)
+        logger.system(f"🛡️ Trend Guard initialized — 4-Stage Exposure Shield active at start price ${initial_start_price:.6f}")
 
         # ─── Initialize Telegram Notifications ───
         tg_token = config.get('telegram_bot_token', '')
@@ -727,13 +729,23 @@ def run_bot(config):
                 tg.notify_risk_warning(f"MAX LOSS BREACHED on {config['symbol']}! Emergency shutdown triggered.")
                 break
 
-            # ─── Trend Guard Check (every 60s) ───
-            trend_guard.process(config['symbol'])
+            # ─── Trend Guard Check (every 60s / every cycle) ───
+            curr_p = grid_engine.current_price or client.get_price()
+            trend_guard.process(config['symbol'], current_price=curr_p)
+
             if trend_guard.is_paused and grid_engine.is_running:
                 logger.risk(f"🛡️ Trend Guard paused grid: {trend_guard.pause_reason}")
                 tg.notify_trend_guard(True, trend_guard.pause_reason, trend_guard.last_adx, trend_guard.last_rsi)
                 grid_engine.cancel_all()
+
+                # ─── Stage 4: EMERGENCY EXPOSURE CONTROL ───
+                if trend_guard.is_emergency:
+                    logger.risk("🚨 STAGE 4 EMERGENCY EXPOSURE CONTROL: Executing 50% Position Trim...")
+                    client.trim_position(percentage=50.0)
+                    tg.notify_risk_warning(f"🚨 EMERGENCY EXPOSURE CONTROL on {config['symbol']}: 50% Position Trimmed to eliminate liquidation risk!")
+
                 socketio.emit('trend_guard_update', trend_guard.get_status())
+
             elif not trend_guard.is_paused and not grid_engine.is_running and not bot_stop_event.is_set():
                 logger.system("🛡️ Trend Guard cleared — Restarting grid...")
                 tg.notify_trend_guard(False, 'Market normalized', trend_guard.last_adx, trend_guard.last_rsi)

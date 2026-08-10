@@ -248,6 +248,68 @@ class BinanceClient:
             self.logger.error(f"Failed to close position: {e}")
             return None
 
+    def trim_position(self, percentage: float = 50.0) -> dict | None:
+        """
+        EMERGENCY EXPOSURE CONTROL: Trim open position by X% (default 50%).
+        Cuts position exposure in half to prevent margin ratio escalation & liquidation.
+        """
+        try:
+            positions = self.exchange.fetch_positions()
+            trimmed_orders = []
+            for pos in positions:
+                contracts = float(pos.get("contracts", 0) or 0)
+                if contracts > 0:
+                    sym = pos["symbol"]
+                    side = pos.get("side", "none").lower()
+                    close_side = "sell" if side in ["long", "buy"] else "buy"
+                    trim_amount = round(contracts * (percentage / 100.0), 4)
+
+                    if trim_amount <= 0:
+                        continue
+
+                    self.logger.risk(
+                        f"🚨 EMERGENCY EXPOSURE CONTROL: Trimming {percentage}% of {side.upper()} "
+                        f"position on {sym} ({trim_amount}/{contracts} contracts)..."
+                    )
+
+                    try:
+                        order = self.exchange.create_order(
+                            symbol=sym,
+                            type="market",
+                            side=close_side,
+                            amount=trim_amount,
+                            params={"reduceOnly": True},
+                        )
+                        trimmed_orders.append(order)
+                    except Exception as err:
+                        self.logger.warn(f"Market trim failed ({err}), placing aggressive Limit ReduceOnly order...")
+                        ticker = self.exchange.fetch_ticker(sym)
+                        current_price = float(ticker.get("last", 0) or 0)
+                        info = self.get_symbol_info_for(sym)
+                        tick_size = info.get("tick_size", 4)
+                        price = float(ticker.get("bid" if close_side == "sell" else "ask", current_price) or current_price)
+                        price = round(price, tick_size)
+
+                        order = self.exchange.create_order(
+                            symbol=sym,
+                            type="limit",
+                            side=close_side,
+                            amount=trim_amount,
+                            price=price,
+                            params={"reduceOnly": True},
+                        )
+                        trimmed_orders.append(order)
+
+            if trimmed_orders:
+                self.logger.system(f"🛡️ Emergency {percentage}% position trim completed successfully!")
+                return trimmed_orders[0]
+            else:
+                self.logger.system("No open position to trim.")
+                return None
+        except Exception as e:
+            self.logger.error(f"Failed to trim position: {e}")
+            return None
+
     def place_limit_order(self, side: str, quantity: float, price: float, client_order_id: str | None = None) -> dict | None:
         """
         Place a LIMIT order.
