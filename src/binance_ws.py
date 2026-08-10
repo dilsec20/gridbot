@@ -53,11 +53,27 @@ class BinanceWSClient:
         self.logger.system("⚡ Ultra-Low Latency WebSocket Client initialized (<50ms real-time stream)")
 
     def stop(self):
-        """Stop the WebSocket listener background thread."""
+        """Stop the WebSocket listener background thread with clean task cancellation."""
         self.is_running = False
         if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            # Cancel all asyncio tasks cleanly, then stop the loop
+            self._loop.call_soon_threadsafe(self._cancel_all_tasks)
+        # Wait for background thread to actually finish (max 3s)
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3.0)
+        self._loop = None
+        self._thread = None
         self.logger.system("WebSocket client stopped.")
+
+    def _cancel_all_tasks(self):
+        """Cancel all running asyncio tasks and schedule loop stop."""
+        try:
+            for task in asyncio.all_tasks(self._loop):
+                task.cancel()
+        except Exception:
+            pass
+        # Schedule loop stop after cancellations propagate
+        self._loop.call_soon(self._loop.stop)
 
     def _run_async_loop(self):
         """Run the asyncio event loop inside the background thread."""
@@ -66,7 +82,24 @@ class BinanceWSClient:
         try:
             self._loop.run_until_complete(self._main_ws_task())
         except Exception as e:
-            self.logger.warn(f"WebSocket loop stopped: {e}")
+            if self.is_running:
+                self.logger.warn(f"WebSocket loop error: {e}")
+        finally:
+            # Clean shutdown: cancel any remaining tasks and close the loop
+            try:
+                pending = asyncio.all_tasks(self._loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    self._loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+            except Exception:
+                pass
+            try:
+                self._loop.close()
+            except Exception:
+                pass
 
     async def _main_ws_task(self):
         """Run both Market Price Stream and User Data Stream concurrently."""

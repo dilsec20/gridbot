@@ -151,16 +151,24 @@ class PerformanceTracker:
                     affected_id = list(ghost_in_bot or missing_in_bot)[0]
                     affected_side = "UNKNOWN"
                     affected_price = 0.0
-                    affected_status = "FILLED"
 
                     for oid in list(ghost_in_bot):
-                        grid_engine.process_order_fill_id(oid)
-                        recovered = True
-                        affected_id = oid
+                        # Read level info BEFORE processing (level is still ACTIVE at this point)
                         level = grid_engine._order_to_level.get(oid)
                         if level:
                             affected_side = level.side.value.upper()
                             affected_price = level.price
+
+                        # Process the fill (marks level as FILLED)
+                        grid_engine.process_order_fill_id(oid)
+
+                        # Always remove from known_order_ids to prevent re-detection on next audit
+                        grid_engine._known_order_ids.discard(oid)
+                        recovered = True
+                        affected_id = oid
+
+                    # Reset consecutive counter after successful healing
+                    self._consecutive_desync_count = 0
 
                     recovery_time_ms = round((time.time() - t0) * 1000, 2)
 
