@@ -850,6 +850,41 @@ class GridEngine:
         except Exception as e:
             self.logger.error(f"Failed to cancel all orders during shutdown: {e}")
 
+    def cancel_opening_orders_only(self):
+        """
+        STAGE 3 GRID PAUSE: Cancel ONLY position-expanding limit orders on Binance,
+        PRESERVING protective closing and Take-Profit (TP) orders!
+        """
+        self.is_running = False
+        self.logger.grid("🛡️ GRID PAUSED: Cancelling position-expanding opening orders (Preserving exit/TP orders)...")
+        try:
+            pos = self.client.get_position()
+            contracts = float(pos.get("contracts", 0) or 0)
+            pos_side = str(pos.get("side", "none")).lower()
+
+            open_orders = self.client.get_open_orders()
+            if not open_orders:
+                return
+
+            for order in open_orders:
+                order_side = str(order.get("side", "")).lower()
+                order_id = order.get("id")
+
+                if (pos_side in ["short", "sell"] or contracts == 0) and order_side == "sell":
+                    try:
+                        self.client.cancel_order(order_id)
+                        self.logger.grid(f"🛡️ Cancelled position-expanding SELL order #{order_id}")
+                    except Exception:
+                        pass
+                elif pos_side in ["long", "buy"] and order_side == "buy":
+                    try:
+                        self.client.cancel_order(order_id)
+                        self.logger.grid(f"🛡️ Cancelled position-expanding BUY order #{order_id}")
+                    except Exception:
+                        pass
+        except Exception as e:
+            self.logger.error(f"Failed to cancel opening orders: {e}")
+
     def get_stats(self) -> dict:
         """Get current grid statistics for dashboard display."""
         active_buys = sum(

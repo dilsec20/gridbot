@@ -275,7 +275,7 @@ class TrendGuard:
         # ─── 2. Hourly ADX/RSI Regime Check ───
         result = self.check_market_conditions(symbol)
 
-        if result['should_pause'] and self.state == GuardState.NORMAL:
+        if result['should_pause'] and self.state in [GuardState.NORMAL, GuardState.TREND_WARNING]:
             self.state = GuardState.GRID_PAUSED
             self.pause_reason = result['regime']
             self.logger.risk(
@@ -285,7 +285,7 @@ class TrendGuard:
             if self.socketio:
                 self.socketio.emit('trend_guard_update', self.get_status())
 
-        elif result['should_resume'] and self.state == GuardState.GRID_PAUSED and not self.spike_paused:
+        elif result['should_resume'] and self.state in [GuardState.GRID_PAUSED, GuardState.TREND_WARNING] and not self.spike_paused:
             self.state = GuardState.NORMAL
             self.pause_reason = ""
             self.logger.system(
@@ -297,6 +297,9 @@ class TrendGuard:
 
         elif self.state == GuardState.NORMAL and "TREND WARNING" in result['regime']:
             self.state = GuardState.TREND_WARNING
+
+        elif self.state == GuardState.TREND_WARNING and "TREND WARNING" not in result['regime'] and not result['should_pause']:
+            self.state = GuardState.NORMAL
 
         return self.pause_reason or self.state.value
 
