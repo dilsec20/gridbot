@@ -737,7 +737,7 @@ def run_bot(config):
             if trend_guard.is_paused and grid_engine.is_running:
                 logger.risk(f"🛡️ Trend Guard paused grid: {trend_guard.pause_reason}")
                 tg.notify_trend_guard(True, trend_guard.pause_reason, trend_guard.last_adx, trend_guard.last_rsi)
-                grid_engine.cancel_all()
+                grid_engine.cancel_opening_orders_only()
 
                 # ─── Stage 4: EMERGENCY EXPOSURE CONTROL ───
                 if trend_guard.is_emergency and not trend_guard.emergency_executed:
@@ -753,6 +753,9 @@ def run_bot(config):
                 tg.notify_trend_guard(False, 'Market normalized', trend_guard.last_adx, trend_guard.last_rsi)
                 grid_engine.is_running = True
                 grid_engine.initialize()
+                # Re-arm spike shield with fresh start price after resume
+                fresh_price = grid_engine.current_price or client.get_price()
+                trend_guard.set_grid_start_price(fresh_price)
                 send_grid_update(grid_engine)
                 socketio.emit('trend_guard_update', trend_guard.get_status())
 

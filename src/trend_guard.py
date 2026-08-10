@@ -95,7 +95,7 @@ class TrendGuard:
         now = time.time()
         if now - self.last_check_time < TREND_CHECK_INTERVAL:
             return {
-                'should_pause': self.is_paused,
+                'should_pause': False,
                 'should_resume': False,
                 'adx': self.last_adx,
                 'rsi': self.last_rsi,
