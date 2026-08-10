@@ -6,9 +6,11 @@ Monitors real-time market conditions and protects the grid from trending markets
 Features:
   1. Anti-Trend Protection: Auto-pauses grid when ADX > 40 or RSI extremes (< 25 or > 75)
      to prevent accumulating one-sided losing positions during crashes/pumps.
-  2. Dynamic Grid Spacing: Auto-widens spacing when volatility spikes (ATR surge)
+  2. REAL-TIME Price Spike Shield: Instantly pauses grid if price moves >5% from
+     grid start price — no candle delay, catches sudden whale pumps/crashes!
+  3. Dynamic Grid Spacing: Auto-widens spacing when volatility spikes (ATR surge)
      and auto-tightens when volatility drops, maximizing cycle capture.
-  3. Auto-Resume: Resumes grid automatically when market conditions normalize.
+  4. Auto-Resume: Resumes grid automatically when market conditions normalize.
 """
 
 import time
@@ -23,6 +25,10 @@ RSI_OVERBOUGHT = 75.0          # Auto-pause grid when RSI > 75 (extreme overboug
 RSI_OVERSOLD = 25.0            # Auto-pause grid when RSI < 25 (extreme oversold crash)
 RSI_SAFE_HIGH = 70.0           # Resume if RSI drops below 70
 RSI_SAFE_LOW = 30.0            # Resume if RSI rises above 30
+
+# Real-Time Price Spike Shield (INSTANT protection — no candle delay!)
+PRICE_SPIKE_THRESHOLD = 5.0    # Pause grid if price moves >5% from grid start price
+PRICE_SPIKE_RESUME = 3.0       # Resume grid when price comes back within 3% of start
 
 # Dynamic Spacing Thresholds
 ATR_NORMAL_LOW = 1.0           # Normal ATR % range lower bound
@@ -58,6 +64,10 @@ class TrendGuard:
         self.last_rsi = 50.0
         self.last_atr_percent = 2.0
         self.current_spacing_multiplier = 1.0
+
+        # Real-Time Price Spike Shield
+        self.grid_start_price = None      # Set when grid starts
+        self.spike_paused = False         # Separate flag for spike-based pause
 
         # History for dynamic spacing
         self.atr_history = []
@@ -159,7 +169,41 @@ class TrendGuard:
             self.logger.warn(f"TrendGuard check error: {e}")
             return self._safe_default()
 
-    def process(self, symbol: str) -> str:
+    def set_grid_start_price(self, price: float):
+        """Set the grid start price when grid initializes. Called by web_server."""
+        self.grid_start_price = price
+        self.spike_paused = False
+        self.logger.system(f"🛡️ Price Spike Shield armed at grid start price: ${price:.6f}")
+
+    def check_price_spike(self, current_price: float) -> dict:
+        """
+        REAL-TIME Price Spike Shield — runs every cycle (no candle delay!).
+        
+        Instantly detects if price has moved >5% from grid start price.
+        This catches sudden whale pumps/crashes that 1-hour ADX candles would miss.
+        """
+        if self.grid_start_price is None or self.grid_start_price <= 0:
+            return {'spike_detected': False, 'spike_resumed': False, 'deviation_pct': 0.0}
+
+        deviation_pct = abs(current_price - self.grid_start_price) / self.grid_start_price * 100.0
+
+        spike_detected = False
+        spike_resumed = False
+
+        if deviation_pct > PRICE_SPIKE_THRESHOLD and not self.spike_paused:
+            spike_detected = True
+            self.spike_paused = True
+        elif deviation_pct < PRICE_SPIKE_RESUME and self.spike_paused:
+            spike_resumed = True
+            self.spike_paused = False
+
+        return {
+            'spike_detected': spike_detected,
+            'spike_resumed': spike_resumed,
+            'deviation_pct': round(deviation_pct, 2),
+        }
+
+    def process(self, symbol: str, current_price: float = 0.0) -> str:
         """
         Main processing method — called every loop iteration.
         Returns the current regime string.
@@ -169,6 +213,46 @@ class TrendGuard:
           - Emits trend_guard_update to dashboard
           - Logs warnings
         """
+        # ─── REAL-TIME Price Spike Check (INSTANT — every cycle!) ───
+        if current_price > 0:
+            spike = self.check_price_spike(current_price)
+            if spike['spike_detected'] and not self.is_paused:
+                self.is_paused = True
+                self.pause_reason = f"⚡ PRICE SPIKE! {spike['deviation_pct']:.1f}% from grid start"
+                self.logger.risk(
+                    f"🛡️ PRICE SPIKE SHIELD ACTIVATED! Price moved {spike['deviation_pct']:.1f}% "
+                    f"from grid start (${self.grid_start_price:.6f} → ${current_price:.6f}) — "
+                    f"Grid PAUSED INSTANTLY to prevent position escalation!"
+                )
+                if self.socketio:
+                    self.socketio.emit('trend_guard_update', {
+                        'paused': True,
+                        'reason': self.pause_reason,
+                        'adx': self.last_adx,
+                        'rsi': self.last_rsi,
+                        'atr_percent': self.last_atr_percent,
+                    })
+                return self.pause_reason
+
+            elif spike['spike_resumed'] and self.is_paused and self.spike_paused is False:
+                # Price came back within safe range
+                self.is_paused = False
+                self.pause_reason = ""
+                self.logger.system(
+                    f"🛡️ PRICE SPIKE CLEARED: Price returned to {spike['deviation_pct']:.1f}% "
+                    f"of grid start — Grid RESUMED."
+                )
+                if self.socketio:
+                    self.socketio.emit('trend_guard_update', {
+                        'paused': False,
+                        'reason': 'Price spike cleared',
+                        'adx': self.last_adx,
+                        'rsi': self.last_rsi,
+                        'atr_percent': self.last_atr_percent,
+                    })
+                return "Price Spike Cleared — Resumed"
+
+        # ─── Hourly ADX/RSI Check (Slower but catches sustained trends) ───
         result = self.check_market_conditions(symbol)
 
         if result['should_pause'] and not self.is_paused:
@@ -188,7 +272,7 @@ class TrendGuard:
                     'atr_percent': result['atr_percent'],
                 })
 
-        elif result['should_resume'] and self.is_paused:
+        elif result['should_resume'] and self.is_paused and not self.spike_paused:
             self.is_paused = False
             self.pause_reason = ""
             self.logger.system(
