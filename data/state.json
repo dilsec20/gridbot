@@ -1,12 +1,12 @@
 {
   "symbol": "ADA/USDT",
-  "completed_cycles": 0,
+  "completed_cycles": 4,
   "quantity": 520.2,
   "grid_spacing": 0.00039,
-  "lowest_buy_price": 0.1959,
-  "highest_sell_price": 0.1959,
+  "lowest_buy_price": 0.19434,
+  "highest_sell_price": 0.19746,
   "inventory_state": "normal",
-  "realized_pnl": 0.0,
+  "realized_pnl": 0.811512,
   "grid_levels_snapshot": [
     {
       "price": 0.19434,
@@ -18,23 +18,65 @@
     {
       "price": 0.19473,
       "side": "buy",
-      "status": "active",
+      "status": "filled",
+      "order_id": "1292755224",
+      "is_replacement": true
+    },
+    {
+      "price": 0.19473,
+      "side": "buy",
+      "status": "filled",
+      "order_id": "1292754766",
+      "is_replacement": true
+    },
+    {
+      "price": 0.19473,
+      "side": "buy",
+      "status": "filled",
       "order_id": "1292743886",
       "is_replacement": false
     },
     {
       "price": 0.19512,
+      "side": "sell",
+      "status": "filled",
+      "order_id": "1292755149",
+      "is_replacement": true
+    },
+    {
+      "price": 0.19512,
+      "side": "sell",
+      "status": "filled",
+      "order_id": "1292753627",
+      "is_replacement": true
+    },
+    {
+      "price": 0.19512,
       "side": "buy",
-      "status": "active",
+      "status": "filled",
       "order_id": "1292743889",
       "is_replacement": false
     },
     {
       "price": 0.19551,
-      "side": "buy",
+      "side": "sell",
       "status": "active",
+      "order_id": "1292751324",
+      "is_replacement": true
+    },
+    {
+      "price": 0.19551,
+      "side": "buy",
+      "status": "filled",
       "order_id": "1292743898",
       "is_replacement": false
+    },
+    {
+      "price": 0.1959,
+      "side": "sell",
+      "status": "active",
+      "order_id": "1292749162",
+      "is_replacement": true
     },
     {
       "price": 0.19629,
@@ -65,7 +107,113 @@
       "is_replacement": false
     }
   ],
-  "processed_fills": [],
-  "processed_fills_history": [],
-  "last_updated": 1786382869.3529348
+  "processed_fills": [
+    "1292755224",
+    "71129634",
+    "1292743898",
+    "1292755149",
+    "1292743889",
+    "71128140",
+    "71129787",
+    "71129158",
+    "1292753627",
+    "71127224",
+    "1292743886",
+    "71129752",
+    "1292754766"
+  ],
+  "processed_fills_history": [
+    {
+      "fill_key": "71127224",
+      "order_id": "1292743898",
+      "trade_id": "71127224",
+      "client_order_id": "x-cvBPrNm9e091f1b2ea8dc948fd3309",
+      "symbol": "ADA/USDT",
+      "side": "BUY",
+      "price": 0.19551,
+      "quantity": 520.2,
+      "processed_at": 1786383507.1419861,
+      "is_replacement": false,
+      "cycle_pnl": 0.0
+    },
+    {
+      "fill_key": "71128140",
+      "order_id": "1292743889",
+      "trade_id": "71128140",
+      "client_order_id": "x-cvBPrNm9d21f6f4ae76c353a4d152c",
+      "symbol": "ADA/USDT",
+      "side": "BUY",
+      "price": 0.19512,
+      "quantity": 520.2,
+      "processed_at": 1786383777.667259,
+      "is_replacement": false,
+      "cycle_pnl": 0.0
+    },
+    {
+      "fill_key": "71129158",
+      "order_id": "1292743886",
+      "trade_id": "71129158",
+      "client_order_id": "x-cvBPrNm9128b85fcd2a8f05e16bd54",
+      "symbol": "ADA/USDT",
+      "side": "BUY",
+      "price": 0.19473,
+      "quantity": 520.2,
+      "processed_at": 1786384112.6866581,
+      "is_replacement": false,
+      "cycle_pnl": 0.0
+    },
+    {
+      "fill_key": "71129634",
+      "order_id": "1292753627",
+      "trade_id": "71129634",
+      "client_order_id": "x-cvBPrNm9b0a048b048e15525c1d29d",
+      "symbol": "ADA/USDT",
+      "side": "SELL",
+      "price": 0.19512,
+      "quantity": 520.2,
+      "processed_at": 1786384279.0914679,
+      "is_replacement": true,
+      "cycle_pnl": 0.202878
+    },
+    {
+      "fill_key": "71129752",
+      "order_id": "1292754766",
+      "trade_id": "71129752",
+      "client_order_id": "x-cvBPrNm9dc0844d3b8c556c6840f39",
+      "symbol": "ADA/USDT",
+      "side": "BUY",
+      "price": 0.19473,
+      "quantity": 520.2,
+      "processed_at": 1786384341.430915,
+      "is_replacement": true,
+      "cycle_pnl": 0.202878
+    },
+    {
+      "fill_key": "71129787",
+      "order_id": "1292755149",
+      "trade_id": "71129787",
+      "client_order_id": "x-cvBPrNm92f4eb770984e13687faac3",
+      "symbol": "ADA/USDT",
+      "side": "SELL",
+      "price": 0.19512,
+      "quantity": 520.2,
+      "processed_at": 1786384349.4510477,
+      "is_replacement": true,
+      "cycle_pnl": 0.202878
+    },
+    {
+      "fill_key": "1292755224",
+      "order_id": "1292755224",
+      "trade_id": "",
+      "client_order_id": "",
+      "symbol": "ADA/USDT",
+      "side": "BUY",
+      "price": 0.19473,
+      "quantity": 520.2,
+      "processed_at": 1786384408.951815,
+      "is_replacement": true,
+      "cycle_pnl": 0.202878
+    }
+  ],
+  "last_updated": 1786384409.1264622
 }

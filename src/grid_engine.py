@@ -571,6 +571,26 @@ class GridEngine:
                 f"waiting for opposite fill to complete cycle..."
             )
 
+        # Check if grid is running and not paused by TrendGuard
+        is_paused = (hasattr(self, 'trend_guard') and self.trend_guard and self.trend_guard.is_paused)
+        if not self.is_running or is_paused:
+            try:
+                pos = self.client.get_position()
+                contracts = float(pos.get("contracts", 0) or 0)
+                pos_side = str(pos.get("side", "none")).lower()
+
+                # Block position-expanding orders during grid pause
+                if (pos_side in ["short", "sell"] or contracts == 0) and new_side == GridSide.SELL:
+                    self.logger.risk(f"🛡️ GRID PAUSED: Blocked position-expanding replacement SELL order ({self.quantity} @ ${new_price:,.2f})")
+                    return
+                elif pos_side in ["long", "buy"] and new_side == GridSide.BUY:
+                    self.logger.risk(f"🛡️ GRID PAUSED: Blocked position-expanding replacement BUY order ({self.quantity} @ ${new_price:,.2f})")
+                    return
+            except Exception:
+                if is_paused or not self.is_running:
+                    self.logger.risk(f"🛡️ GRID PAUSED: Blocked replacement order ({new_side.value.upper()} {self.quantity} @ ${new_price:,.2f})")
+                    return
+
         # Place opposite replacement order & maintain Deque synchronization
         if self.risk_manager.can_place_order(new_side.value, self.quantity, new_price):
             order = self.client.place_limit_order(

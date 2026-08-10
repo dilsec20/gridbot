@@ -1,21 +1,26 @@
 """
-Trend Guard — Anti-Trend Protection & Dynamic Grid Spacing.
+Trend Guard — 4-Stage Anti-Trend & Exposure Control Engine.
 
-Monitors real-time market conditions and protects the grid from trending markets.
-
-Features:
-  1. Anti-Trend Protection: Auto-pauses grid when ADX > 40 or RSI extremes (< 25 or > 75)
-     to prevent accumulating one-sided losing positions during crashes/pumps.
-  2. REAL-TIME Price Spike Shield: Instantly pauses grid if price moves >5% from
-     grid start price — no candle delay, catches sudden whale pumps/crashes!
-  3. Dynamic Grid Spacing: Auto-widens spacing when volatility spikes (ATR surge)
-     and auto-tightens when volatility drops, maximizing cycle capture.
-  4. Auto-Resume: Resumes grid automatically when market conditions normalize.
+Monitors real-time market conditions and enforces a 4-Stage Risk State Machine:
+  1. NORMAL: Ranging market. Grid engine operates with standard spacing.
+  2. TREND_WARNING: ADX > 35 or ATR surge. Dynamic spacing widens.
+  3. GRID_PAUSED: ADX > 40, RSI extremes (< 25 or > 75), or Real-Time Price Displacement > Threshold.
+     Cancels opening limit orders, blocks replacement placement, PRESERVES protective exit/TP orders.
+  4. EMERGENCY: Extreme displacement (> 1.5x threshold) while holding position.
+     Triggers automatic 50% Position Trim to eliminate liquidation risk.
 """
 
 import time
+from enum import Enum
 from typing import Optional
 from quant_engine import calculate_rsi, calculate_adx, calculate_atr
+
+
+class GuardState(str, Enum):
+    NORMAL = "normal"
+    TREND_WARNING = "trend_warning"
+    GRID_PAUSED = "grid_paused"
+    EMERGENCY = "emergency"
 
 
 # Trend Guard Thresholds (Anti-Trend Protection Active)
@@ -25,10 +30,6 @@ RSI_OVERBOUGHT = 75.0          # Auto-pause grid when RSI > 75 (extreme overboug
 RSI_OVERSOLD = 25.0            # Auto-pause grid when RSI < 25 (extreme oversold crash)
 RSI_SAFE_HIGH = 70.0           # Resume if RSI drops below 70
 RSI_SAFE_LOW = 30.0            # Resume if RSI rises above 30
-
-# Real-Time Price Spike Shield (INSTANT protection — no candle delay!)
-PRICE_SPIKE_THRESHOLD = 5.0    # Pause grid if price moves >5% from grid start price
-PRICE_SPIKE_RESUME = 3.0       # Resume grid when price comes back within 3% of start
 
 # Dynamic Spacing Thresholds
 ATR_NORMAL_LOW = 1.0           # Normal ATR % range lower bound
@@ -42,13 +43,7 @@ TREND_CHECK_INTERVAL = 60      # Check trend every 60 seconds
 
 class TrendGuard:
     """
-    Real-time market regime monitor that protects the grid from trending markets.
-    
-    When a strong trend is detected:
-    1. Logs a warning with the detected regime
-    2. Signals the bot to pause new grid orders (existing orders remain)
-    3. Monitors continuously until conditions normalize
-    4. Auto-resumes the grid when market returns to ranging
+    Institutional 4-Stage Market Regime & Exposure Monitor.
     """
 
     def __init__(self, client, logger, socketio=None):
@@ -56,8 +51,8 @@ class TrendGuard:
         self.logger = logger
         self.socketio = socketio
 
-        # State
-        self.is_paused = False
+        # 4-Stage State Machine
+        self.state = GuardState.NORMAL
         self.pause_reason = ""
         self.last_check_time = 0.0
         self.last_adx = 0.0
@@ -65,31 +60,42 @@ class TrendGuard:
         self.last_atr_percent = 2.0
         self.current_spacing_multiplier = 1.0
 
-        # Real-Time Price Spike Shield & Emergency Exposure Control
+        # Real-Time Price Spike Shield & Emergency Execution Tracking
         self.grid_start_price = None      # Set when grid starts
-        self.spike_paused = False         # Separate flag for spike-based pause
-        self.is_emergency = False         # True when extreme displacement requires 50% position trim
+        self.spike_paused = False         # Internal flag for spike pause
+        self.emergency_triggered = False  # Internal flag for emergency state
+        self.emergency_executed = False   # Guarantee 50% trim executes EXACTLY ONCE per event
 
         # History for dynamic spacing
         self.atr_history = []
 
+    @property
+    def is_paused(self) -> bool:
+        """Helper property: True if grid is in GRID_PAUSED or EMERGENCY state."""
+        return self.state in [GuardState.GRID_PAUSED, GuardState.EMERGENCY]
+
+    @property
+    def is_emergency(self) -> bool:
+        """Helper property: True if grid is in EMERGENCY state."""
+        return self.state == GuardState.EMERGENCY
+
+    def set_grid_start_price(self, price: float):
+        """Set the grid start price when grid initializes. Called by web_server."""
+        self.grid_start_price = price
+        self.spike_paused = False
+        self.emergency_triggered = False
+        self.emergency_executed = False
+        self.state = GuardState.NORMAL
+        self.logger.system(f"🛡️ 4-Stage Exposure Shield armed at start price: ${price:.6f}")
+
     def check_market_conditions(self, symbol: str) -> dict:
         """
         Fetch latest OHLCV and calculate ADX/RSI/ATR to determine market regime.
-        
-        Returns dict with:
-          - should_pause: bool
-          - should_resume: bool  
-          - adx: float
-          - rsi: float
-          - atr_percent: float
-          - regime: str
-          - spacing_multiplier: float
         """
         now = time.time()
         if now - self.last_check_time < TREND_CHECK_INTERVAL:
             return {
-                'should_pause': False,
+                'should_pause': self.is_paused,
                 'should_resume': False,
                 'adx': self.last_adx,
                 'rsi': self.last_rsi,
@@ -118,17 +124,15 @@ class TrendGuard:
             self.last_atr_percent = atr_percent
             self.last_check_time = now
 
-            # Track ATR history for dynamic spacing
             self.atr_history.append(atr_percent)
             if len(self.atr_history) > 30:
                 self.atr_history = self.atr_history[-30:]
 
-            # Determine regime
             should_pause = False
             should_resume = False
             regime = "Ranging (Safe)"
 
-            # --- Anti-Trend Protection ---
+            # Anti-Trend Protection Checks
             if adx > ADX_PAUSE_THRESHOLD:
                 should_pause = True
                 regime = f"⚠️ STRONG TREND (ADX: {adx:.1f})"
@@ -138,20 +142,20 @@ class TrendGuard:
             elif rsi < RSI_OVERSOLD:
                 should_pause = True
                 regime = f"⚠️ OVERSOLD CRASH (RSI: {rsi:.1f})"
+            elif adx > 35.0 or rsi > 70.0 or rsi < 30.0:
+                regime = f"⚡ TREND WARNING (ADX: {adx:.1f}, RSI: {rsi:.1f})"
 
-            # Check for resume conditions
+            # Multi-condition resume check
             if self.is_paused:
                 if adx < ADX_RESUME_THRESHOLD and RSI_SAFE_LOW < rsi < RSI_SAFE_HIGH:
                     should_resume = True
                     regime = "✅ Market Normalized — Resuming"
 
-            # --- Dynamic Grid Spacing ---
+            # Dynamic Spacing Multiplier
             spacing_mult = 1.0
             if atr_percent > ATR_NORMAL_HIGH:
-                # High volatility → widen spacing to avoid whipsaws
                 spacing_mult = min(2.0, SPACING_WIDEN_FACTOR * (atr_percent / ATR_NORMAL_HIGH))
             elif atr_percent < ATR_NORMAL_LOW:
-                # Low volatility → tighten spacing to catch more cycles
                 spacing_mult = max(0.6, SPACING_TIGHTEN_FACTOR)
 
             self.current_spacing_multiplier = round(spacing_mult, 2)
@@ -170,41 +174,51 @@ class TrendGuard:
             self.logger.warn(f"TrendGuard check error: {e}")
             return self._safe_default()
 
-    def set_grid_start_price(self, price: float):
-        """Set the grid start price when grid initializes. Called by web_server."""
-        self.grid_start_price = price
-        self.spike_paused = False
-        self.logger.system(f"🛡️ Price Spike Shield armed at grid start price: ${price:.6f}")
-
     def check_price_spike(self, current_price: float) -> dict:
         """
-        REAL-TIME Price Spike Shield — runs every cycle (no candle delay!).
+        REAL-TIME Price Spike Shield — runs every cycle.
+        Calculates ATR-Adaptive Displacement Threshold: max(3.0%, min(8.0%, 2.5 * ATR%)).
         
-        Calculates ATR-Adaptive Displacement Threshold: max(3.0%, min(10.0%, 2.5 * ATR%)).
-        If deviation > threshold → GRID_PAUSED.
-        If deviation > 1.5 * threshold → EMERGENCY EXPOSURE CONTROL (signals 50% position trim!).
+        Fixes sequential price progression bug (0% -> 8% -> 12%) and multi-condition resume requirement.
         """
         if self.grid_start_price is None or self.grid_start_price <= 0:
-            return {'spike_detected': False, 'emergency_detected': False, 'spike_resumed': False, 'deviation_pct': 0.0, 'threshold_pct': 5.0}
+            return {
+                'spike_detected': False,
+                'emergency_detected': False,
+                'spike_resumed': False,
+                'deviation_pct': 0.0,
+                'threshold_pct': 5.0,
+                'emergency_threshold_pct': 7.5
+            }
 
         deviation_pct = abs(current_price - self.grid_start_price) / self.grid_start_price * 100.0
-
-        # ATR-adaptive threshold (e.g., BTC=3.0%, HOME=7.85%)
-        atr_mult = max(3.0, min(10.0, round(2.5 * self.last_atr_percent, 2)))
+        atr_mult = max(3.0, min(8.0, round(2.5 * self.last_atr_percent, 2)))
         emergency_threshold = round(atr_mult * 1.5, 2)
 
         spike_detected = False
         emergency_detected = False
         spike_resumed = False
 
-        if deviation_pct > atr_mult and not self.spike_paused:
-            spike_detected = True
-            self.spike_paused = True
-            if deviation_pct > emergency_threshold:
+        # FIX 2: Evaluate spike_detected AND emergency_detected independently as price progresses!
+        if deviation_pct > atr_mult:
+            if not self.spike_paused:
+                spike_detected = True
+                self.spike_paused = True
+
+            if deviation_pct > emergency_threshold and not self.emergency_triggered:
                 emergency_detected = True
+                self.emergency_triggered = True
+
+        # FIX 3: Safe resume requirement — Price MUST return within 60% of threshold AND ADX < 30 AND 30 < RSI < 70
         elif deviation_pct < (atr_mult * 0.6) and self.spike_paused:
-            spike_resumed = True
-            self.spike_paused = False
+            safe_trend = (self.last_adx < ADX_RESUME_THRESHOLD)
+            safe_rsi = (RSI_SAFE_LOW < self.last_rsi < RSI_SAFE_HIGH)
+
+            if safe_trend and safe_rsi:
+                spike_resumed = True
+                self.spike_paused = False
+                self.emergency_triggered = False
+                self.emergency_executed = False
 
         return {
             'spike_detected': spike_detected,
@@ -212,120 +226,91 @@ class TrendGuard:
             'spike_resumed': spike_resumed,
             'deviation_pct': round(deviation_pct, 2),
             'threshold_pct': atr_mult,
+            'emergency_threshold_pct': emergency_threshold,
         }
 
     def process(self, symbol: str, current_price: float = 0.0) -> str:
         """
-        Main processing method — called every loop iteration.
-        Returns the current regime string.
-        
-        Side effects:
-          - Sets self.is_paused = True/False
-          - Emits trend_guard_update to dashboard
-          - Logs warnings
+        Main processing method — updates 4-stage GuardState.
         """
-        # ─── REAL-TIME Price Spike Check (INSTANT — every cycle!) ───
+        # ─── 1. REAL-TIME Price Spike & Emergency Check ───
         if current_price > 0:
             spike = self.check_price_spike(current_price)
-            if spike['spike_detected'] and not self.is_paused:
-                self.is_paused = True
-                self.pause_reason = f"⚡ PRICE SPIKE! {spike['deviation_pct']:.1f}% from grid start"
-                if spike.get('emergency_detected'):
-                    self.is_emergency = True
-                    self.pause_reason = f"🚨 EXTREME SPIKE! {spike['deviation_pct']:.1f}% displacement (EMERGENCY)"
 
+            if spike['emergency_detected']:
+                self.state = GuardState.EMERGENCY
+                self.pause_reason = f"🚨 STAGE 4 EMERGENCY! {spike['deviation_pct']:.1f}% displacement (Threshold: {spike['emergency_threshold_pct']}%)"
                 self.logger.risk(
-                    f"🛡️ PRICE SPIKE SHIELD ACTIVATED! Price moved {spike['deviation_pct']:.1f}% "
-                    f"from grid start (${self.grid_start_price:.6f} → ${current_price:.6f}, threshold: {spike['threshold_pct']}%) — "
-                    f"Grid PAUSED INSTANTLY to prevent position escalation! "
-                    f"(Emergency Trim Active: {self.is_emergency})"
+                    f"🚨 STAGE 4 EMERGENCY EXPOSURE CONTROL ACTIVATED! Price displaced {spike['deviation_pct']:.1f}% "
+                    f"from start price (${self.grid_start_price:.6f} → ${current_price:.6f}) — "
+                    f"Signaling 50% Position Trim!"
                 )
                 if self.socketio:
-                    self.socketio.emit('trend_guard_update', {
-                        'paused': True,
-                        'reason': self.pause_reason,
-                        'emergency': self.is_emergency,
-                        'adx': self.last_adx,
-                        'rsi': self.last_rsi,
-                        'atr_percent': self.last_atr_percent,
-                    })
+                    self.socketio.emit('trend_guard_update', self.get_status())
                 return self.pause_reason
 
-            elif spike['spike_resumed'] and self.is_paused and self.spike_paused is False:
-                # Price came back within safe range
-                self.is_paused = False
-                self.is_emergency = False
-                self.pause_reason = ""
-                self.logger.system(
-                    f"🛡️ PRICE SPIKE CLEARED: Price returned to {spike['deviation_pct']:.1f}% "
-                    f"of grid start — Grid RESUMED."
+            elif spike['spike_detected'] and self.state != GuardState.EMERGENCY:
+                self.state = GuardState.GRID_PAUSED
+                self.pause_reason = f"⚡ STAGE 3 GRID PAUSED: Price spike {spike['deviation_pct']:.1f}% (Threshold: {spike['threshold_pct']}%)"
+                self.logger.risk(
+                    f"🛡️ STAGE 3 PRICE SPIKE SHIELD ACTIVATED! Price moved {spike['deviation_pct']:.1f}% "
+                    f"from grid start (${self.grid_start_price:.6f} → ${current_price:.6f}) — "
+                    f"Grid PAUSED to prevent position escalation!"
                 )
                 if self.socketio:
-                    self.socketio.emit('trend_guard_update', {
-                        'paused': False,
-                        'reason': 'Price spike cleared',
-                        'emergency': False,
-                        'adx': self.last_adx,
-                        'rsi': self.last_rsi,
-                        'atr_percent': self.last_atr_percent,
-                    })
-                return "Price Spike Cleared — Resumed"
+                    self.socketio.emit('trend_guard_update', self.get_status())
+                return self.pause_reason
 
-        # ─── Hourly ADX/RSI Check (Slower but catches sustained trends) ───
+            elif spike['spike_resumed'] and self.is_paused:
+                self.state = GuardState.NORMAL
+                self.pause_reason = ""
+                self.logger.system(
+                    f"🛡️ TREND GUARD CLEARED: Price returned to {spike['deviation_pct']:.1f}% "
+                    f"and ADX/RSI normalized — Grid RESUMED."
+                )
+                if self.socketio:
+                    self.socketio.emit('trend_guard_update', self.get_status())
+                return "Trend Guard Cleared — Resumed"
+
+        # ─── 2. Hourly ADX/RSI Regime Check ───
         result = self.check_market_conditions(symbol)
 
-        if result['should_pause'] and not self.is_paused:
-            self.is_paused = True
+        if result['should_pause'] and self.state == GuardState.NORMAL:
+            self.state = GuardState.GRID_PAUSED
             self.pause_reason = result['regime']
             self.logger.risk(
-                f"🛡️ TREND GUARD ACTIVATED: {result['regime']} — "
-                f"Grid PAUSED to protect from losses! "
+                f"🛡️ STAGE 3 TREND GUARD ACTIVATED: {result['regime']} — Grid PAUSED! "
                 f"(ADX: {result['adx']:.1f}, RSI: {result['rsi']:.1f})"
             )
             if self.socketio:
-                self.socketio.emit('trend_guard_update', {
-                    'paused': True,
-                    'reason': result['regime'],
-                    'emergency': self.is_emergency,
-                    'adx': result['adx'],
-                    'rsi': result['rsi'],
-                    'atr_percent': result['atr_percent'],
-                })
+                self.socketio.emit('trend_guard_update', self.get_status())
 
-        elif result['should_resume'] and self.is_paused and not self.spike_paused:
-            self.is_paused = False
-            self.is_emergency = False
+        elif result['should_resume'] and self.state == GuardState.GRID_PAUSED and not self.spike_paused:
+            self.state = GuardState.NORMAL
             self.pause_reason = ""
             self.logger.system(
-                f"🛡️ TREND GUARD CLEARED: Market conditions normalized! "
-                f"Grid RESUMED. (ADX: {result['adx']:.1f}, RSI: {result['rsi']:.1f})"
+                f"🛡️ STAGE 1 NORMAL: Market conditions normalized! Grid RESUMED. "
+                f"(ADX: {result['adx']:.1f}, RSI: {result['rsi']:.1f})"
             )
             if self.socketio:
-                self.socketio.emit('trend_guard_update', {
-                    'paused': False,
-                    'reason': 'Market normalized',
-                    'emergency': False,
-                    'adx': result['adx'],
-                    'rsi': result['rsi'],
-                    'atr_percent': result['atr_percent'],
-                })
+                self.socketio.emit('trend_guard_update', self.get_status())
 
-        return result['regime']
+        elif self.state == GuardState.NORMAL and "TREND WARNING" in result['regime']:
+            self.state = GuardState.TREND_WARNING
+
+        return self.pause_reason or self.state.value
 
     def get_adjusted_spacing(self, base_spacing: float) -> float:
-        """
-        Return dynamically adjusted grid spacing based on current volatility.
-        
-        During high volatility: wider spacing (fewer but safer cycles)
-        During low volatility: tighter spacing (more frequent cycles)
-        """
+        """Return dynamically adjusted grid spacing based on current volatility."""
         return round(base_spacing * self.current_spacing_multiplier, 8)
 
     def get_status(self) -> dict:
         """Get current trend guard status for dashboard."""
         return {
+            'state': self.state.value,
             'paused': self.is_paused,
             'emergency': self.is_emergency,
+            'emergency_executed': self.emergency_executed,
             'reason': self.pause_reason,
             'adx': self.last_adx,
             'rsi': self.last_rsi,

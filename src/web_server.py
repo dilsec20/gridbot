@@ -667,6 +667,7 @@ def run_bot(config):
         trend_guard = TrendGuard(client, logger, socketio)
         initial_start_price = grid_engine.current_price or client.get_price()
         trend_guard.set_grid_start_price(initial_start_price)
+        grid_engine.trend_guard = trend_guard
         logger.system(f"🛡️ Trend Guard initialized — 4-Stage Exposure Shield active at start price ${initial_start_price:.6f}")
 
         # ─── Initialize Telegram Notifications ───
@@ -739,9 +740,10 @@ def run_bot(config):
                 grid_engine.cancel_all()
 
                 # ─── Stage 4: EMERGENCY EXPOSURE CONTROL ───
-                if trend_guard.is_emergency:
+                if trend_guard.is_emergency and not trend_guard.emergency_executed:
                     logger.risk("🚨 STAGE 4 EMERGENCY EXPOSURE CONTROL: Executing 50% Position Trim...")
                     client.trim_position(percentage=50.0)
+                    trend_guard.emergency_executed = True
                     tg.notify_risk_warning(f"🚨 EMERGENCY EXPOSURE CONTROL on {config['symbol']}: 50% Position Trimmed to eliminate liquidation risk!")
 
                 socketio.emit('trend_guard_update', trend_guard.get_status())
