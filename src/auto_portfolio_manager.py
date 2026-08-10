@@ -39,14 +39,12 @@ RESCORE_INTERVAL_SECONDS = 1800
 MIN_TRADEABLE_SCORE = 65
 
 
-def get_smart_max_position(balance: float, leverage: int) -> float:
+def get_smart_max_position(balance: float, leverage: int = 5) -> float:
     """
-    Calculate safe max position value based on wallet balance and leverage.
-    
-    Formula: balance × leverage × 0.35 (capped at 1000.0 USDT for risk safety)
+    Calculate safe max position value based on account equity.
+    Formula: min(balance * 1.65, 1000.0)
     """
-    raw = balance * leverage * 0.35
-    return round(min(1000.0, max(50.0, raw)), 2)
+    return round(min(max(20.0, balance * 1.65), 1000.0), 2)
 
 
 class AutoPortfolioManager:
