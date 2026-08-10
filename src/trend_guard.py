@@ -88,7 +88,7 @@ class TrendGuard:
             }
 
         try:
-            ohlcv = self.client.fetch_ohlcv(symbol, timeframe='15m', limit=50)
+            ohlcv = self.client.fetch_ohlcv(symbol, timeframe='1h', limit=50)
             if not ohlcv or len(ohlcv) < 30:
                 return self._safe_default()
 
