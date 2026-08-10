@@ -345,9 +345,9 @@ class QuantEngine:
                 else:
                     quantity = float(round(quantity, lot_size))
 
-            # Risk Shields (Max Loss = 15% wallet equity, Max Position = 2.5x total grid notional)
+            # Risk Shields (Max Loss = 15% wallet equity, Max Position capped at 1000 USDT)
             max_loss_usdt = round(max(10.0, balance * 0.15), 2)
-            max_position_usdt = round(max(100.0, target_notional_per_level * grid_levels * 0.35), 2)
+            max_position_usdt = round(min(1000.0, max(100.0, target_notional_per_level * grid_levels * 0.35)), 2)
 
             # 8. Institutional Confidence & Daily ROI Predictions
             ranging_probability = int(round(max(50.0, 100.0 - (adx * 1.0) - abs(rsi - 50.0))))

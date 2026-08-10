@@ -43,17 +43,10 @@ def get_smart_max_position(balance: float, leverage: int) -> float:
     """
     Calculate safe max position value based on wallet balance and leverage.
     
-    Formula: balance × leverage × 0.35
-    This ensures the bot never uses more than ~35% of leveraged capacity,
-    keeping a massive safety buffer.
-    
-    Examples:
-      $104 wallet at 5x  → max_pos = $182 USDT
-      $104 wallet at 10x → max_pos = $364 USDT
-      $104 wallet at 3x  → max_pos = $109 USDT
+    Formula: balance × leverage × 0.35 (capped at 1000.0 USDT for risk safety)
     """
     raw = balance * leverage * 0.35
-    return round(max(50.0, min(raw, balance * leverage * 0.50)), 2)
+    return round(min(1000.0, max(50.0, raw)), 2)
 
 
 class AutoPortfolioManager:

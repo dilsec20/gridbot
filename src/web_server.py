@@ -610,12 +610,19 @@ def run_bot(config):
         risk_manager = RiskManager(config, client, logger)
         risk_manager.initialize()
 
-        # Auto-calculate smart max position based on wallet balance + leverage
-        leverage = config.get('leverage', 5)
-        smart_max_pos = get_smart_max_position(balance, leverage)
-        config['max_position_usdt'] = smart_max_pos
-        risk_manager.max_position_usdt = smart_max_pos
-        logger.system(f"Max position limit: ${smart_max_pos:,.2f}")
+        # Respect user manual max position setting if provided, otherwise fallback to smart calculation
+        user_max_pos = config.get('max_position_usdt')
+        if user_max_pos is not None and float(user_max_pos) > 0:
+            final_max_pos = float(user_max_pos)
+            config['user_set_max_position'] = True
+        else:
+            leverage = config.get('leverage', 5)
+            final_max_pos = get_smart_max_position(balance, leverage)
+            config['user_set_max_position'] = False
+
+        config['max_position_usdt'] = final_max_pos
+        risk_manager.max_position_usdt = final_max_pos
+        logger.system(f"Max position limit: ${final_max_pos:,.2f}")
 
         grid_engine = GridEngine(config, client, risk_manager, logger)
         shared_grid_engine = grid_engine
@@ -798,10 +805,11 @@ def run_bot(config):
                     config['quantity_per_grid'] = switch_config.get('quantity', 0.001)
                     config['leverage'] = switch_config.get('recommended_leverage', 5)
 
-                    # 4. Recalculate smart max position for new leverage
+                    # 4. Recalculate smart max position for new leverage (unless user manually set a limit)
                     fresh_balance = client.get_wallet_balance()
                     new_leverage = config['leverage']
-                    config['max_position_usdt'] = get_smart_max_position(fresh_balance, new_leverage)
+                    if not config.get('user_set_max_position'):
+                        config['max_position_usdt'] = get_smart_max_position(fresh_balance, new_leverage)
                     config['max_loss_usdt'] = round(max(10.0, fresh_balance * 0.15), 2)
 
                     # 5. Reinitialize client for new symbol
