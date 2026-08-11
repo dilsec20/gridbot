@@ -165,30 +165,42 @@ class BinanceClient:
             return getattr(self, "_cached_wallet_balance", 5000.0)
 
     def get_position(self) -> dict:
-        """Get current position for the symbol."""
-        try:
-            positions = self.exchange.fetch_positions()
-            target_symbols = {
-                self.symbol,
-                self.symbol.replace(":USDT", ""),
-                self.symbol.replace("/", "").replace(":USDT", ""),
-                f"{self.symbol}:USDT" if ":" not in self.symbol else self.symbol
-            }
-            for pos in positions:
-                if pos.get("symbol") in target_symbols:
-                    contracts = float(pos.get("contracts", 0) or 0)
-                    if contracts != 0:
-                        return {
-                            "size": contracts,
-                            "side": pos.get("side", "none"),
-                            "entry_price": float(pos.get("entryPrice", 0) or 0),
-                            "unrealized_pnl": float(pos.get("unrealizedPnl", 0) or 0),
-                            "notional": float(pos.get("notional", 0) or 0),
-                        }
-            return {"size": 0, "side": "none", "entry_price": 0, "unrealized_pnl": 0, "notional": 0}
-        except Exception as e:
-            self.logger.error(f"Failed to fetch position: {e}")
-            return {"size": 0, "side": "none", "entry_price": 0, "unrealized_pnl": 0, "notional": 0}
+        """Get current position for the symbol with retry and cached fallback."""
+        if not hasattr(self, "_cached_position"):
+            self._cached_position = {"size": 0, "side": "none", "entry_price": 0, "unrealized_pnl": 0, "notional": 0}
+
+        target_symbols = {
+            self.symbol,
+            self.symbol.replace(":USDT", ""),
+            self.symbol.replace("/", "").replace(":USDT", ""),
+            f"{self.symbol}:USDT" if ":" not in self.symbol else self.symbol
+        }
+
+        for attempt in range(2):
+            try:
+                positions = self.exchange.fetch_positions()
+                for pos in positions:
+                    if pos.get("symbol") in target_symbols:
+                        contracts = float(pos.get("contracts", 0) or 0)
+                        if contracts != 0:
+                            res = {
+                                "size": contracts,
+                                "side": pos.get("side", "none"),
+                                "entry_price": float(pos.get("entryPrice", 0) or 0),
+                                "unrealized_pnl": float(pos.get("unrealizedPnl", 0) or 0),
+                                "notional": float(pos.get("notional", 0) or 0),
+                            }
+                            self._cached_position = res
+                            return res
+                res = {"size": 0, "side": "none", "entry_price": 0, "unrealized_pnl": 0, "notional": 0}
+                self._cached_position = res
+                return res
+            except Exception as e:
+                if attempt == 0:
+                    time.sleep(0.5)
+                    continue
+                self.logger.warn(f"Transient position fetch issue (using cached state): {e}")
+                return self._cached_position
 
     def close_position(self) -> dict | None:
         """Market close ALL open positions across the entire Binance account."""
