@@ -576,7 +576,7 @@ class GridEngine:
         if not self.is_running or is_paused:
             try:
                 pos = self.client.get_position()
-                contracts = float(pos.get("contracts", 0) or 0)
+                contracts = float(pos.get("size", 0) or pos.get("contracts", 0) or 0)
                 pos_side = str(pos.get("side", "none")).lower()
 
                 # Block position-expanding orders during grid pause
@@ -859,7 +859,7 @@ class GridEngine:
         self.logger.grid("🛡️ GRID PAUSED: Cancelling position-expanding opening orders (Preserving exit/TP orders)...")
         try:
             pos = self.client.get_position()
-            contracts = float(pos.get("contracts", 0) or 0)
+            contracts = float(pos.get("size", 0) or pos.get("contracts", 0) or 0)
             pos_side = str(pos.get("side", "none")).lower()
 
             open_orders = self.client.get_open_orders()
@@ -870,7 +870,13 @@ class GridEngine:
                 order_side = str(order.get("side", "")).lower()
                 order_id = order.get("id")
 
-                if (pos_side in ["short", "sell"] or contracts == 0) and order_side == "sell":
+                if contracts == 0:
+                    try:
+                        self.client.cancel_order(order_id)
+                        self.logger.grid(f"🛡️ Cancelled opening {order_side.upper()} order #{order_id}")
+                    except Exception:
+                        pass
+                elif pos_side in ["short", "sell"] and order_side == "sell":
                     try:
                         self.client.cancel_order(order_id)
                         self.logger.grid(f"🛡️ Cancelled position-expanding SELL order #{order_id}")
