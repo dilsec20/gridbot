@@ -428,7 +428,10 @@ class GridEngine:
 
     def check_and_process_fills(self):
         """Poll open orders to detect fills in O(1) set operations."""
-        if not self.is_running:
+        # Allow fill detection even when grid is paused by TrendGuard,
+        # so we can count cycles and track PnL for exit orders that fill on Binance.
+        is_tg_paused = (hasattr(self, 'trend_guard') and self.trend_guard and self.trend_guard.is_paused)
+        if not self.is_running and not is_tg_paused:
             return
 
         try:
@@ -579,8 +582,12 @@ class GridEngine:
                 contracts = float(pos.get("size", 0) or pos.get("contracts", 0) or 0)
                 pos_side = str(pos.get("side", "none")).lower()
 
+                # When paused with NO position, block ALL new orders (any order would open risk)
+                if contracts == 0:
+                    self.logger.risk(f"🛡️ GRID PAUSED: Position closed — Blocked replacement {new_side.value.upper()} order ({self.quantity} @ ${new_price:,.2f})")
+                    return
                 # Block position-expanding orders during grid pause
-                if (pos_side in ["short", "sell"] or contracts == 0) and new_side == GridSide.SELL:
+                elif pos_side in ["short", "sell"] and new_side == GridSide.SELL:
                     self.logger.risk(f"🛡️ GRID PAUSED: Blocked position-expanding replacement SELL order ({self.quantity} @ ${new_price:,.2f})")
                     return
                 elif pos_side in ["long", "buy"] and new_side == GridSide.BUY:
@@ -869,23 +876,26 @@ class GridEngine:
             for order in open_orders:
                 order_side = str(order.get("side", "")).lower()
                 order_id = order.get("id")
+                should_cancel = False
 
                 if contracts == 0:
-                    try:
-                        self.client.cancel_order(order_id)
-                        self.logger.grid(f"🛡️ Cancelled opening {order_side.upper()} order #{order_id}")
-                    except Exception:
-                        pass
+                    should_cancel = True
                 elif pos_side in ["short", "sell"] and order_side == "sell":
-                    try:
-                        self.client.cancel_order(order_id)
-                        self.logger.grid(f"🛡️ Cancelled position-expanding SELL order #{order_id}")
-                    except Exception:
-                        pass
+                    should_cancel = True
                 elif pos_side in ["long", "buy"] and order_side == "buy":
+                    should_cancel = True
+
+                if should_cancel:
                     try:
                         self.client.cancel_order(order_id)
-                        self.logger.grid(f"🛡️ Cancelled position-expanding BUY order #{order_id}")
+                        self.logger.grid(f"🛡️ Cancelled position-expanding {order_side.upper()} order #{order_id}")
+                        # Clean up tracking state so check_and_process_fills
+                        # does NOT mistake these cancelled orders as "fills"
+                        self._known_order_ids.discard(order_id)
+                        self._known_order_ids.discard(str(order_id))
+                        level = self._order_to_level.get(order_id) or self._order_to_level.get(str(order_id))
+                        if level:
+                            level.status = GridOrderStatus.CANCELLED
                     except Exception:
                         pass
         except Exception as e:
