@@ -443,6 +443,11 @@ class GridEngine:
                 level = self._order_to_level.get(order_id)
                 if level and level.status == GridOrderStatus.ACTIVE:
                     self._handle_fill(level)
+                elif level and level.status in (GridOrderStatus.TRAILING_TP, GridOrderStatus.TRAILING_BUY):
+                    # Order was cancelled by trailing TP/BUY activation — NOT a real fill.
+                    # Remove from tracking to prevent ghost fill detection, but let
+                    # the trailing mechanism handle the actual fill when it triggers.
+                    self._known_order_ids.discard(order_id)
 
             # Perform boundary self-healing check periodically
             self._reconcile_boundaries()
@@ -788,6 +793,13 @@ class GridEngine:
                         f"🎯 TRAILING TP TRIGGERED! Captured Peak: {fmt_price(level.peak_price)} | "
                         f"Exited @ {fmt_price(current_price)} | Trailing Profit Locked: ${extra_profit:+.4f}!"
                     )
+                    # CRITICAL: Set FILLED immediately to prevent re-triggering on next price update
+                    level.status = GridOrderStatus.FILLED
+                    # Allow _handle_fill to process this as the real fill event
+                    # (the order_id may have been added to _processed_fills when the limit cancel
+                    # was mistakenly detected as a "fill" by check_and_process_fills)
+                    if level.order_id:
+                        self._processed_fills.discard(str(level.order_id))
                     self._handle_fill(level)
 
     def _process_trailing_buy(self, current_price: float):
@@ -839,6 +851,11 @@ class GridEngine:
                         f"🎯 TRAILING BUY TRIGGERED! Captured Trough: {fmt_price(level.trough_price)} | "
                         f"Bought @ {fmt_price(current_price)} | Entry Savings: ${savings:+.4f}!"
                     )
+                    # CRITICAL: Set FILLED immediately to prevent re-triggering on next price update
+                    level.status = GridOrderStatus.FILLED
+                    # Allow _handle_fill to process this as the real fill event
+                    if level.order_id:
+                        self._processed_fills.discard(str(level.order_id))
                     self._handle_fill(level)
 
     def update_price(self, price: float):
