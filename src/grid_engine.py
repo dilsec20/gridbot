@@ -165,7 +165,7 @@ class GridEngine:
             self.logger.error(f"Error loading state from {self.state_file}: {e}")
 
     def _prune_expired_fills(self, now: Optional[float] = None):
-        """Continuous time-based pruning: Remove entries older than 30 days independently of count."""
+        """Continuous time-based pruning: Remove entries older than 30 days and rebuild _processed_fills set from history."""
         now = now or time.time()
         RETENTION_SECONDS = 30 * 86400  # 30 Days
 
@@ -175,6 +175,7 @@ class GridEngine:
         ]
         self._processed_fills_history = deque(valid_entries, maxlen=self.MAX_PROCESSED_FILLS)
 
+        # Rebuild _processed_fills from pruned history to cap set size
         active_keys = set()
         for e in self._processed_fills_history:
             if e.get("trade_id"):
@@ -482,7 +483,7 @@ class GridEngine:
             self.logger.grid(f"⚡ INSTANT WS FILL DETECTED: Order #{order_id} ({fill_side.upper()} @ {fmt_price(fill_price)})")
             self._handle_fill(level, fill_info=fill_data)
 
-    def _handle_fill(self, filled_level: GridLevel, fill_info: Optional[dict] = None):
+    def _handle_fill(self, filled_level: GridLevel, fill_info: Optional[dict] = None, execution_price: Optional[float] = None):
         """Process an order fill and place opposite replacement order to complete cycle (Thread-Safe Exactly-Once)."""
         if not filled_level or not filled_level.order_id:
             return
@@ -524,7 +525,15 @@ class GridEngine:
             filled_level.filled_at = now
             self._known_order_ids.discard(filled_level.order_id)
 
-        self.logger.trade(filled_level.side.value.upper(), filled_level.price, self.quantity)
+            # Remove FILLED level from deque to prevent unbounded growth
+            try:
+                self.grid_levels.remove(filled_level)
+            except ValueError:
+                pass
+
+        # Use actual execution price for trailing TP/BUY, fall back to grid level price
+        log_price = execution_price if execution_price else filled_level.price
+        self.logger.trade(filled_level.side.value.upper(), log_price, self.quantity)
 
         # Fee tracking
         fill_notional = filled_level.price * self.quantity
@@ -684,7 +693,7 @@ class GridEngine:
                 # Pure O(1) Deque Eviction: Evict top unfilled SELL FIRST to free margin on exchange
                 if active_count >= self.grid_levels_count and self.grid_levels:
                     top_sell = self.grid_levels[-1]
-                    if top_sell.side == GridSide.SELL and not top_sell.is_replacement and top_sell.status == GridOrderStatus.ACTIVE:
+                    if top_sell.side == GridSide.SELL and top_sell.status == GridOrderStatus.ACTIVE:
                         try:
                             self.client.cancel_order(top_sell.order_id)
                             top_sell.status = GridOrderStatus.CANCELLED
@@ -719,7 +728,7 @@ class GridEngine:
             # Pure O(1) Deque Eviction: Evict bottom unfilled BUY FIRST to free margin on exchange
             if active_count >= self.grid_levels_count and self.grid_levels:
                 bottom_buy = self.grid_levels[0]
-                if bottom_buy.side == GridSide.BUY and not bottom_buy.is_replacement and bottom_buy.status == GridOrderStatus.ACTIVE:
+                if bottom_buy.side == GridSide.BUY and bottom_buy.status == GridOrderStatus.ACTIVE:
                     try:
                         self.client.cancel_order(bottom_buy.order_id)
                         bottom_buy.status = GridOrderStatus.CANCELLED
@@ -800,7 +809,7 @@ class GridEngine:
                     # was mistakenly detected as a "fill" by check_and_process_fills)
                     if level.order_id:
                         self._processed_fills.discard(str(level.order_id))
-                    self._handle_fill(level)
+                    self._handle_fill(level, execution_price=current_price)
 
     def _process_trailing_buy(self, current_price: float):
         """
@@ -856,7 +865,7 @@ class GridEngine:
                     # Allow _handle_fill to process this as the real fill event
                     if level.order_id:
                         self._processed_fills.discard(str(level.order_id))
-                    self._handle_fill(level)
+                    self._handle_fill(level, execution_price=current_price)
 
     def update_price(self, price: float):
         """Update the current market price (from WebSocket or polling)."""
