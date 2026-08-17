@@ -767,11 +767,28 @@ class GridEngine:
             # 1. Activate trailing TP when price hits or exceeds a SELL target level
             if level.side == GridSide.SELL and level.status == GridOrderStatus.ACTIVE:
                 if current_price >= level.price:
+                    cancel_ok = False
                     if level.order_id:
                         try:
                             self.client.cancel_order(level.order_id)
+                            cancel_ok = True
                         except Exception:
-                            pass
+                            # Order was already filled/cancelled by Binance (e.g. sell limit below market)
+                            cancel_ok = False
+
+                    if not cancel_ok:
+                        # Order was already filled instantly by Binance — process as direct fill
+                        self.logger.grid(f"⚡ SELL @ {fmt_price(level.price)} already filled by Binance — processing as direct fill")
+                        level.status = GridOrderStatus.FILLED
+                        if level.order_id:
+                            self._processed_fills.discard(str(level.order_id))
+                        self._handle_fill(level, execution_price=current_price)
+                        continue
+
+                    # Clean up order tracking since we cancelled the limit order
+                    self._order_to_level.pop(level.order_id, None)
+                    self._known_order_ids.discard(level.order_id)
+
                     level.status = GridOrderStatus.TRAILING_TP
                     level.peak_price = current_price
                     callback = self.trailing_tp_callback / 100.0
@@ -825,11 +842,27 @@ class GridEngine:
             # 1. Activate trailing BUY when price drops to or below a BUY target level
             if level.side == GridSide.BUY and level.status == GridOrderStatus.ACTIVE:
                 if current_price <= level.price:
+                    cancel_ok = False
                     if level.order_id:
                         try:
                             self.client.cancel_order(level.order_id)
+                            cancel_ok = True
                         except Exception:
-                            pass
+                            cancel_ok = False
+
+                    if not cancel_ok:
+                        # Order was already filled instantly by Binance — process as direct fill
+                        self.logger.grid(f"⚡ BUY @ {fmt_price(level.price)} already filled by Binance — processing as direct fill")
+                        level.status = GridOrderStatus.FILLED
+                        if level.order_id:
+                            self._processed_fills.discard(str(level.order_id))
+                        self._handle_fill(level, execution_price=current_price)
+                        continue
+
+                    # Clean up order tracking since we cancelled the limit order
+                    self._order_to_level.pop(level.order_id, None)
+                    self._known_order_ids.discard(level.order_id)
+
                     level.status = GridOrderStatus.TRAILING_BUY
                     level.trough_price = current_price
                     callback = self.trailing_tp_callback / 100.0
@@ -950,12 +983,14 @@ class GridEngine:
         }
 
     def get_display_levels(self) -> list:
-        """Get list of current grid levels for UI display."""
+        """Get list of current grid levels for UI display (only ACTIVE and TRAILING levels)."""
         levels_map = {}
         for l in self.grid_levels:
-            levels_map[l.price] = l
+            if l.status in (GridOrderStatus.ACTIVE, GridOrderStatus.TRAILING_TP, GridOrderStatus.TRAILING_BUY):
+                levels_map[l.price] = l
         for l in self._order_to_level.values():
-            levels_map[l.price] = l
+            if l.status in (GridOrderStatus.ACTIVE, GridOrderStatus.TRAILING_TP, GridOrderStatus.TRAILING_BUY):
+                levels_map[l.price] = l
         return list(levels_map.values())
 
     def print_grid(self):
