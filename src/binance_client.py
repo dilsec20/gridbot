@@ -367,6 +367,47 @@ class BinanceClient:
 
         return None
 
+    def place_market_order(self, side: str, quantity: float, reduce_only: bool = False) -> dict | None:
+        """
+        Place a MARKET order for instant execution (Trailing TP / Trailing Buy).
+        side: 'buy' or 'sell'
+        Returns order dict on success, None on failure.
+        """
+        max_retries = 3
+        params = {}
+        if reduce_only:
+            params["reduceOnly"] = True
+
+        for attempt in range(max_retries):
+            try:
+                order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type="market",
+                    side=side,
+                    amount=quantity,
+                    params=params,
+                )
+                self.logger.trade(side.upper(), float(order.get("price") or 0.0), quantity)
+                return order
+
+            except ccxt.InvalidOrder as e:
+                self.logger.error(f"Invalid market order {side} {quantity}: {e}")
+                return None
+
+            except (ccxt.NetworkError, ccxt.ExchangeNotAvailable) as e:
+                self.logger.warn(f"Network error on market order (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                else:
+                    self.logger.error(f"Failed to place market order after {max_retries} attempts")
+                    return None
+
+            except Exception as e:
+                self.logger.error(f"Unexpected error placing market order: {e}")
+                return None
+
+        return None
+
     def fetch_order(self, order_id: str) -> dict | None:
         """Fetch order details by ID from Binance."""
         try:

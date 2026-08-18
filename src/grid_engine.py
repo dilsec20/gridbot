@@ -110,6 +110,7 @@ class GridEngine:
         self._processed_fills: set[str] = set()
         self.MAX_PROCESSED_FILLS = 5000
         self._processed_fills_history: deque[dict] = deque(maxlen=self.MAX_PROCESSED_FILLS)
+        self._recent_filled_levels: deque[GridLevel] = deque(maxlen=20)
 
         # Load persistent state if available
         self._load_state()
@@ -423,10 +424,11 @@ class GridEngine:
             )
 
             if order:
+                order_id_str = str(order["id"])
                 level.status = GridOrderStatus.ACTIVE
-                level.order_id = order["id"]
-                self._order_to_level[order["id"]] = level
-                self._known_order_ids.add(order["id"])
+                level.order_id = order_id_str
+                self._order_to_level[order_id_str] = level
+                self._known_order_ids.add(order_id_str)
                 placed += 1
                 time.sleep(0.08)
             else:
@@ -532,6 +534,12 @@ class GridEngine:
             filled_level.status = GridOrderStatus.FILLED
             filled_level.filled_at = now
             self._known_order_ids.discard(filled_level.order_id)
+            self._known_order_ids.discard(str(filled_level.order_id))
+            self._order_to_level.pop(filled_level.order_id, None)
+            self._order_to_level.pop(str(filled_level.order_id), None)
+
+            # Store recent fill for UI dashboard visibility
+            self._recent_filled_levels.append(filled_level)
 
             # Remove FILLED level from deque to prevent unbounded growth
             try:
@@ -629,15 +637,16 @@ class GridEngine:
             )
 
             if order:
+                order_id_str = str(order["id"])
                 new_level = GridLevel(
                     price=new_price,
                     side=new_side,
                     status=GridOrderStatus.ACTIVE,
-                    order_id=order["id"],
+                    order_id=order_id_str,
                     is_replacement=True,
                 )
-                self._order_to_level[order["id"]] = new_level
-                self._known_order_ids.add(order["id"])
+                self._order_to_level[order_id_str] = new_level
+                self._known_order_ids.add(order_id_str)
 
                 # Deque Synchronization: Insert replacement level preserving strict price order
                 self._insert_level_sorted(new_level)
@@ -799,7 +808,9 @@ class GridEngine:
 
                     # Clean up order tracking since we cancelled the limit order
                     self._order_to_level.pop(level.order_id, None)
+                    self._order_to_level.pop(str(level.order_id), None)
                     self._known_order_ids.discard(level.order_id)
+                    self._known_order_ids.discard(str(level.order_id))
 
                     level.status = GridOrderStatus.TRAILING_TP
                     level.peak_price = current_price
@@ -831,11 +842,13 @@ class GridEngine:
                         f"🎯 TRAILING TP TRIGGERED! Captured Peak: {fmt_price(level.peak_price)} | "
                         f"Exited @ {fmt_price(current_price)} | Trailing Profit Locked: ${extra_profit:+.4f}!"
                     )
-                    # CRITICAL: Set FILLED immediately to prevent re-triggering on next price update
-                    level.status = GridOrderStatus.FILLED
-                    # Allow _handle_fill to process this as the real fill event
-                    # (the order_id may have been added to _processed_fills when the limit cancel
-                    # was mistakenly detected as a "fill" by check_and_process_fills)
+                    # Execute market sell order on exchange to lock in peak exit
+                    m_order = self.client.place_market_order(side="sell", quantity=self.quantity)
+                    if m_order and "id" in m_order:
+                        level.order_id = str(m_order["id"])
+
+                    # Set level status to PENDING so _handle_fill can transition it to FILLED and place replacement BUY
+                    level.status = GridOrderStatus.PENDING
                     if level.order_id:
                         self._processed_fills.discard(str(level.order_id))
                     self._handle_fill(level, execution_price=current_price)
@@ -873,7 +886,9 @@ class GridEngine:
 
                     # Clean up order tracking since we cancelled the limit order
                     self._order_to_level.pop(level.order_id, None)
+                    self._order_to_level.pop(str(level.order_id), None)
                     self._known_order_ids.discard(level.order_id)
+                    self._known_order_ids.discard(str(level.order_id))
 
                     level.status = GridOrderStatus.TRAILING_BUY
                     level.trough_price = current_price
@@ -905,9 +920,13 @@ class GridEngine:
                         f"🎯 TRAILING BUY TRIGGERED! Captured Trough: {fmt_price(level.trough_price)} | "
                         f"Bought @ {fmt_price(current_price)} | Entry Savings: ${savings:+.4f}!"
                     )
-                    # CRITICAL: Set FILLED immediately to prevent re-triggering on next price update
-                    level.status = GridOrderStatus.FILLED
-                    # Allow _handle_fill to process this as the real fill event
+                    # Execute market buy order on exchange to enter dip
+                    m_order = self.client.place_market_order(side="buy", quantity=self.quantity)
+                    if m_order and "id" in m_order:
+                        level.order_id = str(m_order["id"])
+
+                    # Set level status to PENDING so _handle_fill can transition it to FILLED and place replacement SELL
+                    level.status = GridOrderStatus.PENDING
                     if level.order_id:
                         self._processed_fills.discard(str(level.order_id))
                     self._handle_fill(level, execution_price=current_price)
@@ -997,13 +1016,17 @@ class GridEngine:
     def get_display_levels(self) -> list:
         """Get list of current grid levels for UI display (shows ACTIVE, FILLED, and TRAILING levels)."""
         levels_map = {}
+        # 1. Historical recent filled levels
+        for l in getattr(self, "_recent_filled_levels", []):
+            levels_map[l.price] = l
+        # 2. Live active/trailing grid levels override with current live status
         for l in self.grid_levels:
             if l.status != GridOrderStatus.CANCELLED:
                 levels_map[l.price] = l
         for l in self._order_to_level.values():
             if l.status != GridOrderStatus.CANCELLED:
                 levels_map[l.price] = l
-        return list(levels_map.values())
+        return sorted(list(levels_map.values()), key=lambda x: x.price, reverse=True)
 
     def print_grid(self):
         """Print the current grid state."""

@@ -154,27 +154,41 @@ class PerformanceTracker:
 
                     for oid in list(ghost_in_bot):
                         # Read level info BEFORE processing (level is still ACTIVE at this point)
-                        level = grid_engine._order_to_level.get(oid)
+                        level = (
+                            grid_engine._order_to_level.get(oid) or
+                            grid_engine._order_to_level.get(str(oid))
+                        )
                         if level:
                             affected_side = level.side.value.upper()
                             affected_price = level.price
+                            # Process the fill (marks level as FILLED)
+                            grid_engine.process_order_fill_id(oid)
+                            recovered = True
+                            affected_id = oid
 
-                        # Process the fill (marks level as FILLED)
-                        grid_engine.process_order_fill_id(oid)
-
-                        # Always remove from known_order_ids to prevent re-detection on next audit
+                        # Always remove from known_order_ids & order_to_level to prevent re-detection
                         grid_engine._known_order_ids.discard(oid)
-                        recovered = True
-                        affected_id = oid
+                        grid_engine._known_order_ids.discard(str(oid))
+                        try:
+                            grid_engine._known_order_ids.discard(int(oid))
+                        except Exception:
+                            pass
+                        grid_engine._order_to_level.pop(oid, None)
+                        grid_engine._order_to_level.pop(str(oid), None)
+                        try:
+                            grid_engine._order_to_level.pop(int(oid), None)
+                        except Exception:
+                            pass
 
                     # Reset consecutive counter after successful healing
                     self._consecutive_desync_count = 0
 
                     recovery_time_ms = round((time.time() - t0) * 1000, 2)
 
-                    self.logger.system(
-                        f"⚡ Order Reconciliation: Synced filled order #{affected_id} ({affected_side} @ ${affected_price:,.2f}) in {recovery_time_ms}ms"
-                    )
+                    if recovered:
+                        self.logger.system(
+                            f"⚡ Order Reconciliation: Synced filled order #{affected_id} ({affected_side} @ ${affected_price:,.2f}) in {recovery_time_ms}ms"
+                        )
                     return False
             else:
                 self._consecutive_desync_count = 0
