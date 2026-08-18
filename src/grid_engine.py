@@ -395,6 +395,10 @@ class GridEngine:
 
         if active_sells:
             self.highest_sell_price = max(active_sells)
+        elif active_buys and self.grid_spacing > 0:
+            # No active sells — use highest buy + spacing as virtual sell boundary
+            # so the rolling grid can expand upward to add SELL levels
+            self.highest_sell_price = max(active_buys) + self.grid_spacing
         elif self.current_price > 0:
             self.highest_sell_price = self.current_price
 
@@ -717,6 +721,8 @@ class GridEngine:
                         self._insert_level_sorted(new_level)
                         self._order_to_level[order["id"]] = new_level
                         self._known_order_ids.add(order["id"])
+                        # Update boundary so next call can expand further
+                        self.lowest_buy_price = new_price
 
         # Deque Upper Expansion: Require price to rise past highest sell by 1 full spacing step
         elif self.current_price >= (self.highest_sell_price + 1.0 * self.grid_spacing):
@@ -752,6 +758,8 @@ class GridEngine:
                     self._insert_level_sorted(new_level)
                     self._order_to_level[order["id"]] = new_level
                     self._known_order_ids.add(order["id"])
+                    # Update boundary so next call can expand further
+                    self.highest_sell_price = new_price
 
     def _process_trailing_tp(self, current_price: float):
         """
