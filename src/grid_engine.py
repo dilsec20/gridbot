@@ -715,7 +715,9 @@ class GridEngine:
                             self.client.cancel_order(top_sell.order_id)
                             top_sell.status = GridOrderStatus.CANCELLED
                             self._order_to_level.pop(top_sell.order_id, None)
+                            self._order_to_level.pop(str(top_sell.order_id), None)
                             self._known_order_ids.discard(top_sell.order_id)
+                            self._known_order_ids.discard(str(top_sell.order_id))
                             self.grid_levels.pop()  # Pure O(1) Right Eviction!
                             self.logger.grid(f"⚡ Evicted top SELL #{top_sell.order_id} @ ${top_sell.price:,.2f} — Margin freed!")
                         except Exception as e:
@@ -725,15 +727,16 @@ class GridEngine:
                     self.logger.grid(f"⚡ Pure Deque O(1) Expansion: Appending BUY level @ ${new_price:,.2f}")
                     order = self.client.place_limit_order("BUY", self.quantity, new_price)
                     if order and "id" in order:
+                        order_id_str = str(order["id"])
                         new_level = GridLevel(
                             price=new_price,
                             side=GridSide.BUY,
                             status=GridOrderStatus.ACTIVE,
-                            order_id=order["id"]
+                            order_id=order_id_str
                         )
                         self._insert_level_sorted(new_level)
-                        self._order_to_level[order["id"]] = new_level
-                        self._known_order_ids.add(order["id"])
+                        self._order_to_level[order_id_str] = new_level
+                        self._known_order_ids.add(order_id_str)
                         # Update boundary so next call can expand further
                         self.lowest_buy_price = new_price
 
@@ -752,7 +755,9 @@ class GridEngine:
                         self.client.cancel_order(bottom_buy.order_id)
                         bottom_buy.status = GridOrderStatus.CANCELLED
                         self._order_to_level.pop(bottom_buy.order_id, None)
+                        self._order_to_level.pop(str(bottom_buy.order_id), None)
                         self._known_order_ids.discard(bottom_buy.order_id)
+                        self._known_order_ids.discard(str(bottom_buy.order_id))
                         self.grid_levels.popleft()  # Pure O(1) Left Eviction!
                         self.logger.grid(f"⚡ Evicted bottom BUY #{bottom_buy.order_id} @ ${bottom_buy.price:,.2f} — Margin freed!")
                     except Exception as e:
@@ -762,15 +767,16 @@ class GridEngine:
                 self.logger.grid(f"⚡ Pure Deque O(1) Expansion: Appending SELL level @ ${new_price:,.2f}")
                 order = self.client.place_limit_order("SELL", self.quantity, new_price)
                 if order and "id" in order:
+                    order_id_str = str(order["id"])
                     new_level = GridLevel(
                         price=new_price,
                         side=GridSide.SELL,
                         status=GridOrderStatus.ACTIVE,
-                        order_id=order["id"]
+                        order_id=order_id_str
                     )
                     self._insert_level_sorted(new_level)
-                    self._order_to_level[order["id"]] = new_level
-                    self._known_order_ids.add(order["id"])
+                    self._order_to_level[order_id_str] = new_level
+                    self._known_order_ids.add(order_id_str)
                     # Update boundary so next call can expand further
                     self.highest_sell_price = new_price
 
@@ -800,7 +806,6 @@ class GridEngine:
                     if not cancel_ok:
                         # Order was already filled instantly by Binance — process as direct fill
                         self.logger.grid(f"⚡ SELL @ {fmt_price(level.price)} already filled by Binance — processing as direct fill")
-                        level.status = GridOrderStatus.FILLED
                         if level.order_id:
                             self._processed_fills.discard(str(level.order_id))
                         self._handle_fill(level, execution_price=current_price)
@@ -878,7 +883,6 @@ class GridEngine:
                     if not cancel_ok:
                         # Order was already filled instantly by Binance — process as direct fill
                         self.logger.grid(f"⚡ BUY @ {fmt_price(level.price)} already filled by Binance — processing as direct fill")
-                        level.status = GridOrderStatus.FILLED
                         if level.order_id:
                             self._processed_fills.discard(str(level.order_id))
                         self._handle_fill(level, execution_price=current_price)

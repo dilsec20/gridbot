@@ -717,11 +717,13 @@ def run_bot(config):
             except Exception:
                 pass
 
-            # Failsafe REST poll check for fills every 5s (skip when grid is paused)
+            # Failsafe REST poll check for fills every 5s
             if now - last_poll >= poll_interval:
-                if grid_engine.is_running:
+                is_tg_paused = (hasattr(grid_engine, 'trend_guard') and grid_engine.trend_guard and grid_engine.trend_guard.is_paused) or (trend_guard and trend_guard.is_paused)
+                if grid_engine.is_running or is_tg_paused:
                     grid_engine.check_and_process_fills()
-                    grid_engine._check_auto_trailing_recenter()
+                    if grid_engine.is_running:
+                        grid_engine._check_auto_trailing_recenter()
                     send_grid_update(grid_engine)
                 last_poll = now
 
