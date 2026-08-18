@@ -721,6 +721,7 @@ def run_bot(config):
             if now - last_poll >= poll_interval:
                 if grid_engine.is_running:
                     grid_engine.check_and_process_fills()
+                    grid_engine._check_auto_trailing_recenter()
                     send_grid_update(grid_engine)
                 last_poll = now
 

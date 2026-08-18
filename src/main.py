@@ -154,6 +154,7 @@ class GridTradingBot:
                 # --- Failsafe Poll for order fills ---
                 if now - last_poll >= poll_interval:
                     self.grid_engine.check_and_process_fills()
+                    self.grid_engine._check_auto_trailing_recenter()
                     last_poll = now
 
                 # --- Risk check ---
