@@ -995,13 +995,13 @@ class GridEngine:
         }
 
     def get_display_levels(self) -> list:
-        """Get list of current grid levels for UI display (only ACTIVE and TRAILING levels)."""
+        """Get list of current grid levels for UI display (shows ACTIVE, FILLED, and TRAILING levels)."""
         levels_map = {}
         for l in self.grid_levels:
-            if l.status in (GridOrderStatus.ACTIVE, GridOrderStatus.TRAILING_TP, GridOrderStatus.TRAILING_BUY):
+            if l.status != GridOrderStatus.CANCELLED:
                 levels_map[l.price] = l
         for l in self._order_to_level.values():
-            if l.status in (GridOrderStatus.ACTIVE, GridOrderStatus.TRAILING_TP, GridOrderStatus.TRAILING_BUY):
+            if l.status != GridOrderStatus.CANCELLED:
                 levels_map[l.price] = l
         return list(levels_map.values())
 
