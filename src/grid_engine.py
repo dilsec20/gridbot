@@ -390,6 +390,10 @@ class GridEngine:
 
         if active_buys:
             self.lowest_buy_price = min(active_buys)
+        elif active_sells and self.grid_spacing > 0:
+            # No active buys — use lowest sell - spacing as virtual buy boundary
+            # so the rolling grid can expand downward to add BUY levels
+            self.lowest_buy_price = min(active_sells) - self.grid_spacing
         elif self.current_price > 0:
             self.lowest_buy_price = self.current_price
 
