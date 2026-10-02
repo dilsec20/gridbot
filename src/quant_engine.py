@@ -345,9 +345,14 @@ class QuantEngine:
                 else:
                     quantity = float(round(quantity, lot_size))
 
-            # Risk Shields (Max Loss = 15% wallet equity, Max Position = min(equity * 1.65, 1000.0))
+            # Risk Shields (Max Loss = 15% wallet equity)
             max_loss_usdt = round(max(10.0, balance * 0.15), 2)
-            max_position_usdt = round(min(max(20.0, balance * 1.65), 1000.0), 2)
+            # Max Position: allow half buy-side grid to fill, capped at 50% leveraged equity for liquidation safety
+            order_notional = quantity * current_price if current_price > 0 else 0
+            half_buy_levels = max(1, grid_levels // 2)
+            max_equity_cap = balance * recommended_leverage * 0.50
+            grid_based_max = order_notional * min(half_buy_levels, 4)
+            max_position_usdt = round(max(50.0, min(grid_based_max, max_equity_cap)), 2)
 
             # 8. Institutional Confidence & Daily ROI Predictions
             ranging_probability = int(round(max(50.0, 100.0 - (adx * 1.0) - abs(rsi - 50.0))))

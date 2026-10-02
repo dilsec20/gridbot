@@ -617,7 +617,11 @@ def run_bot(config):
             config['user_set_max_position'] = True
         else:
             leverage = config.get('leverage', 5)
-            final_max_pos = get_smart_max_position(balance, leverage)
+            qty = config.get('quantity_per_grid', 0.001)
+            price = client.get_price() if hasattr(client, 'get_price') else 0
+            order_notional = qty * price if price > 0 else 0
+            grid_lvls = config.get('grid_levels', 10)
+            final_max_pos = get_smart_max_position(balance, leverage, order_notional, grid_lvls)
             config['user_set_max_position'] = False
 
         config['max_position_usdt'] = final_max_pos
@@ -812,7 +816,11 @@ def run_bot(config):
                     fresh_balance = client.get_wallet_balance()
                     new_leverage = config['leverage']
                     if not config.get('user_set_max_position'):
-                        config['max_position_usdt'] = get_smart_max_position(fresh_balance, new_leverage)
+                        new_qty = config.get('quantity_per_grid', 0.001)
+                        new_price = client.get_price() if hasattr(client, 'get_price') else 0
+                        new_notional = new_qty * new_price if new_price > 0 else 0
+                        new_grid_lvls = config.get('grid_levels', 10)
+                        config['max_position_usdt'] = get_smart_max_position(fresh_balance, new_leverage, new_notional, new_grid_lvls)
                     config['max_loss_usdt'] = round(max(10.0, fresh_balance * 0.15), 2)
 
                     # 5. Reinitialize client for new symbol

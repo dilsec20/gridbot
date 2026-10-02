@@ -39,12 +39,28 @@ RESCORE_INTERVAL_SECONDS = 1800
 MIN_TRADEABLE_SCORE = 65
 
 
-def get_smart_max_position(balance: float, leverage: int = 5) -> float:
+def get_smart_max_position(balance: float, leverage: int = 5,
+                           order_notional: float = 0.0, grid_levels: int = 10) -> float:
     """
-    Calculate safe max position value based on account equity.
-    Formula: min(balance * 1.65, 1000.0)
+    Calculate safe max position value based on account equity and actual grid order sizes.
+    
+    Logic:
+    - If order_notional is known: allow half the buy-side grid to fill (balanced exposure)
+    - Cap at 50% of total leveraged equity to maintain liquidation safety buffer
+    - Floor at $50 minimum for micro accounts
     """
-    return round(min(max(20.0, balance * 1.65), 1000.0), 2)
+    half_buy_levels = max(1, grid_levels // 2)
+    max_equity_cap = balance * leverage * 0.50  # Never exceed 50% of total buying power
+    
+    if order_notional > 0:
+        # Allow half the buy levels to fill before blocking (balanced grid exposure)
+        grid_based_max = order_notional * min(half_buy_levels, 4)  # Cap at 4 levels max
+        safe_max = min(grid_based_max, max_equity_cap)
+    else:
+        # Fallback: 20% of total equity when order size is unknown
+        safe_max = balance * leverage * 0.20
+    
+    return round(max(50.0, safe_max), 2)
 
 
 class AutoPortfolioManager:
