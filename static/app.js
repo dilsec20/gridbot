@@ -953,7 +953,7 @@ function updateMarginCalculator() {
     const requiredMargin = totalNotional / leverage;
     // Margin Per Grid Order = requiredMargin / levels
     const marginPerOrder = levels > 0 ? requiredMargin / levels : 0.0;
-    // Calculate Est. Profit per Cycle ($ & %)
+    // Calculate Est. Profit per Cycle ($ & %) — NET of estimated Binance fees
     const spacingMode = document.getElementById('spacingMode')?.value || 'percent';
     let spacingUsdt = 0;
     if (spacingMode === 'percent') {
@@ -962,10 +962,19 @@ function updateMarginCalculator() {
     } else {
         spacingUsdt = parseFloat(document.getElementById('gridSpacing')?.value) || 50.0;
     }
-    const profitPerCycle = spacingUsdt * qtyPerGrid;
+    const grossProfitPerCycle = spacingUsdt * qtyPerGrid;
     const orderNotional = price * qtyPerGrid;
+    // Binance Futures taker fee: 0.05% per side × 2 sides = 0.10% round-trip
+    const feeRate = 0.0005;
+    const roundTripFee = orderNotional * feeRate * 2.0;
+    const profitPerCycle = grossProfitPerCycle - roundTripFee;
     const orderMargin = leverage > 0 ? orderNotional / leverage : orderNotional;
     const cycleRoiPercent = orderMargin > 0 ? (profitPerCycle / orderMargin) * 100.0 : 0.0;
+
+    // Fee-eaten spacing warning
+    const feeBreakevenSpacing = price * feeRate * 2.0;
+    const isFeeDangerous = spacingUsdt <= feeBreakevenSpacing;
+    const isFeeTight = spacingUsdt <= (price * feeRate * 3.0);
 
     // Calculate Liquidation Buffer (% drop to liquidation)
     const liqBufferPercent = leverage > 0 ? ((1 / leverage) * 90.0) : 100.0;
@@ -979,7 +988,18 @@ function updateMarginCalculator() {
     if (notionalEl) notionalEl.textContent = formatPrice(totalNotional);
     if (marginEl) marginEl.textContent = `${requiredMargin >= 1 ? requiredMargin.toFixed(2) : requiredMargin.toFixed(4)} USDT`;
     if (marginPerGridEl) marginPerGridEl.textContent = `${marginPerOrder >= 1 ? marginPerOrder.toFixed(2) : marginPerOrder.toFixed(4)} USDT`;
-    if (estProfitEl) estProfitEl.textContent = `+${formatPrice(profitPerCycle)} (+${cycleRoiPercent.toFixed(1)}%)`;
+    if (estProfitEl) {
+        if (isFeeDangerous) {
+            estProfitEl.textContent = `⚠️ -${formatPrice(Math.abs(profitPerCycle))} (LOSS — fees > profit!)`;
+            estProfitEl.style.color = '#f87171';
+        } else if (isFeeTight) {
+            estProfitEl.textContent = `+${formatPrice(profitPerCycle)} (+${cycleRoiPercent.toFixed(1)}%) ⚠️ Low margin`;
+            estProfitEl.style.color = '#fbbf24';
+        } else {
+            estProfitEl.textContent = `+${formatPrice(profitPerCycle)} (+${cycleRoiPercent.toFixed(1)}%)`;
+            estProfitEl.style.color = '';
+        }
+    }
     if (liqBufferEl) liqBufferEl.textContent = `-${liqBufferPercent.toFixed(1)}% Drop (Safe)`;
 
     // Calculate Institutional 24h Performance Predictions
@@ -1007,13 +1027,16 @@ function updateMarginCalculator() {
     const scaledCyclesMin = Math.round(baseCyclesMin * suitabilityMult);
     const scaledCyclesMax = Math.round(baseCyclesMax * suitabilityMult);
 
-    const estDailyPnlMin = profitPerCycle * scaledCyclesMin;
-    const estDailyPnlMax = profitPerCycle * scaledCyclesMax;
+    // Use NET profit (after fees) for daily estimates
+    const netProfitForEstimate = Math.max(0, profitPerCycle);
+    const estDailyPnlMin = netProfitForEstimate * scaledCyclesMin;
+    const estDailyPnlMax = netProfitForEstimate * scaledCyclesMax;
 
     const predSymbolEl = document.getElementById('predSymbol');
     const predConfidenceEl = document.getElementById('predConfidence');
     const predCyclesEl = document.getElementById('predCycles24h');
     const predPnlCycleEl = document.getElementById('predPnlCycle');
+    const predFeeCycleEl = document.getElementById('predFeeCycle');
     const predDailyPnlEl = document.getElementById('predDailyPnl');
 
     if (predSymbolEl) predSymbolEl.textContent = currentSymbol;
@@ -1046,6 +1069,17 @@ function updateMarginCalculator() {
     }
 
     if (predPnlCycleEl) predPnlCycleEl.textContent = `+${formatPrice(profitPerCycle)}`;
+
+    if (predFeeCycleEl) {
+        predFeeCycleEl.textContent = `-${formatPrice(roundTripFee)}`;
+        if (roundTripFee >= grossProfitPerCycle) {
+            predFeeCycleEl.style.color = '#f87171';
+        } else if (roundTripFee >= grossProfitPerCycle * 0.5) {
+            predFeeCycleEl.style.color = '#fbbf24';
+        } else {
+            predFeeCycleEl.style.color = '#6b7280';
+        }
+    }
 
     if (predDailyPnlEl) {
         if (coinStatus === 'Avoid') {

@@ -86,6 +86,10 @@ class GridEngine:
         self.trailing_tp_enabled = config.get("trailing_tp_enabled", True)
         self.trailing_tp_callback = config.get("trailing_tp_callback_percent", 0.5)
 
+        # Exchange Fee Rate (taker fee per side, default Binance Futures 0.05%)
+        # Used to deduct estimated round-trip fees from cycle PnL so dashboard matches real cash
+        self.fee_rate = config.get("exchange_fee_rate", 0.0005)  # 0.05% per side
+
         # Persistent State File Path
         self.state_file = os.path.join("data", "state.json")
 
@@ -272,6 +276,28 @@ class GridEngine:
         else:
             self.grid_spacing = self.config.get("grid_spacing_usdt", 50.0)
             self.logger.grid(f"Spacing mode: FLAT USDT (${self.grid_spacing})")
+
+        # ─── Minimum Spacing Guard: Prevent Fee-Eaten Grids ───
+        # Round-trip fee cost = 2 × fee_rate × price (buy fee + sell fee)
+        # Spacing must exceed this to generate net profit per cycle
+        min_profitable_spacing = round(self.current_price * self.fee_rate * 3.0, self.tick_size)
+        fee_breakeven_spacing = round(self.current_price * self.fee_rate * 2.0, self.tick_size)
+        if self.grid_spacing <= fee_breakeven_spacing:
+            old_spacing = self.grid_spacing
+            self.grid_spacing = min_profitable_spacing
+            old_pct = (old_spacing / self.current_price) * 100.0 if self.current_price > 0 else 0
+            new_pct = (self.grid_spacing / self.current_price) * 100.0 if self.current_price > 0 else 0
+            self.logger.warn(
+                f"⚠️ SPACING TOO TIGHT! {old_pct:.3f}% (${old_spacing}) would be eaten by Binance fees "
+                f"(~${fee_breakeven_spacing} round-trip fee per cycle). "
+                f"Auto-adjusted to {new_pct:.3f}% (${self.grid_spacing}) to guarantee net profit per cycle."
+            )
+        elif self.grid_spacing < min_profitable_spacing:
+            fee_pct = (fee_breakeven_spacing / self.grid_spacing) * 100.0 if self.grid_spacing > 0 else 100
+            self.logger.warn(
+                f"⚠️ Low margin warning: ~{fee_pct:.0f}% of each cycle's profit goes to Binance fees. "
+                f"Consider increasing spacing above {(min_profitable_spacing / self.current_price * 100.0):.3f}% for healthier margins."
+            )
 
         self.logger.grid(f"Current {self.symbol} price: {self.current_price}")
         self.logger.grid(f"Symbol precision: tick={self.tick_size}, lot={lot_size}")
@@ -512,7 +538,12 @@ class GridEngine:
             self._processed_fills.add(str(filled_level.order_id))
 
             now = time.time()
-            cycle_profit = (self.grid_spacing * self.quantity) if filled_level.is_replacement else 0.0
+            if filled_level.is_replacement:
+                gross_profit = self.grid_spacing * self.quantity
+                notional = filled_level.price * self.quantity
+                cycle_profit = gross_profit - (notional * self.fee_rate * 2.0)
+            else:
+                cycle_profit = 0.0
             audit_entry = {
                 "fill_key": fill_key,
                 "order_id": str(filled_level.order_id),
@@ -566,14 +597,18 @@ class GridEngine:
 
         if filled_level.is_replacement:
             self.completed_cycles += 1
-            cycle_pnl = self.grid_spacing * self.quantity
+            gross_pnl = self.grid_spacing * self.quantity
+            # Deduct estimated round-trip exchange fees (buy + sell) for accurate net PnL
+            order_notional = filled_level.price * self.quantity
+            round_trip_fee = order_notional * self.fee_rate * 2.0  # fee on buy side + fee on sell side
+            cycle_pnl = gross_pnl - round_trip_fee
 
             self.risk_manager.add_realized_pnl(cycle_pnl)
             total_pnl = self.risk_manager.get_realized_pnl()
 
             self.logger.grid(
                 f"Grid cycle #{self.completed_cycles} completed! PnL: "
-                f"${cycle_pnl:+.4f} | Total: ${total_pnl:+.4f}"
+                f"${cycle_pnl:+.4f} (gross ${gross_pnl:+.4f} - fees ${round_trip_fee:.4f}) | Total: ${total_pnl:+.4f}"
             )
 
             current_balance = 0.0
