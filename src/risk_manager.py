@@ -37,7 +37,14 @@ class RiskManager:
     def get_max_position_limit(self) -> float:
         """Resolve the notional cap from free margin and any fixed dollar ceiling."""
         available_balance = float(self.client.get_balance())
-        return position_budget(available_balance, self.config)
+        actual_lev = float(
+            getattr(self.client, "actual_leverage", None)
+            or self.config.get("leverage", 1)
+            or 1
+        )
+        return position_budget(
+            available_balance, self.config, leverage=actual_lev
+        )
 
     def add_realized_pnl(self, pnl: float):
         """Track realized PnL from completed grid cycles."""

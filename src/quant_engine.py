@@ -340,7 +340,7 @@ class QuantEngine:
             if balance <= 0:
                 raise ValueError("No free USDT margin is available for an AI recommendation.")
 
-            max_position_usdt = position_budget(balance, self.config)
+            max_position_usdt = position_budget(balance, self.config, leverage=1.0)
             orders_per_side = max(1, (grid_levels + 1) // 2)
             worst_grid_price = (
                 current_price + orders_per_side * recommended_spacing_usdt

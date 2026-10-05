@@ -168,8 +168,8 @@
                 </div>
                 <div class="form-group">
                     <label>Leverage (applied at start)</label>
-                    <input type="number" id="leverage" class="number-input" value="5" min="1" max="10" oninput="updateMarginCalculator()">
-                    <small>AI leverage is only a suggestion. Binance leverage is verified at startup; non-stablecoin pairs are capped at 5x.</small>
+                    <input type="number" id="leverage" class="number-input" value="5" min="1" max="20" oninput="updateMarginCalculator()">
+                    <small>Exchange leverage (1x - 20x). Verified at startup on Binance Futures.</small>
                 </div>
 
                 <!-- Margin & Position Calculator -->

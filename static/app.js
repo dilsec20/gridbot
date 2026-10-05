@@ -313,16 +313,17 @@ function updateAutoMaxPositionHint(recommendedCap) {
     if (!hint) return;
 
     const manualCap = Number(document.getElementById('maxPosition')?.value || 0);
+    const leverage = Number(document.getElementById('leverage')?.value || 5);
     const dynamicCap = Number.isFinite(availableFuturesBalance)
-        ? availableFuturesBalance * 0.6
-        : Number.isFinite(recommendedCap) ? recommendedCap : null;
+        ? availableFuturesBalance * 0.6 * leverage
+        : Number.isFinite(recommendedCap) ? recommendedCap * leverage : null;
     if (dynamicCap === null) {
-        hint.textContent = 'Automatic limit: 60% of available futures balance.';
+        hint.textContent = 'Automatic limit: 60% margin × leverage.';
         return;
     }
 
     const effectiveCap = manualCap > 0 ? Math.min(manualCap, dynamicCap) : dynamicCap;
-    hint.textContent = `Current automatic limit: $${effectiveCap.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (60% of available balance${manualCap > 0 ? ', capped by your manual limit' : ''}).`;
+    hint.textContent = `Current automatic limit: $${effectiveCap.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (60% margin × ${leverage}x leverage${manualCap > 0 ? ', capped by manual limit' : ''}).`;
 }
 
 // ─── Live Funding Settlement Countdown Timer ───
@@ -1002,8 +1003,8 @@ function updateMarginCalculator() {
     const totalNotional = ordersPerSide * qtyPerGrid * worstGridPrice;
     const manualCap = parseFloat(document.getElementById('maxPosition')?.value) || 0;
     const dynamicCap = Number.isFinite(availableFuturesBalance)
-        ? availableFuturesBalance * 0.6
-        : Number(activeAiRecommendation?.max_position_usdt || 0);
+        ? availableFuturesBalance * 0.6 * leverage
+        : (Number(activeAiRecommendation?.max_position_usdt || 0) * leverage);
     const positionLimit = manualCap > 0
         ? (dynamicCap > 0 ? Math.min(manualCap, dynamicCap) : manualCap)
         : dynamicCap;

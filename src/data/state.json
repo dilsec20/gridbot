@@ -1,64 +1,78 @@
 {
   "symbol": "SOL/USDT",
   "completed_cycles": 0,
-  "quantity": 22.295,
-  "grid_spacing": 0.31,
-  "lowest_buy_price": 119.53,
-  "highest_sell_price": 119.53,
+  "quantity": 17.64,
+  "grid_spacing": 0.3,
+  "lowest_buy_price": 119.33,
+  "highest_sell_price": 119.33,
   "inventory_state": "normal",
   "realized_pnl": 0.0,
   "grid_levels_snapshot": [
     {
-      "price": 118.29,
+      "price": 117.83,
       "side": "buy",
       "status": "active",
-      "order_id": "4217451244",
+      "order_id": "4217502002",
       "is_replacement": false
     },
     {
-      "price": 118.6,
+      "price": 118.13,
       "side": "buy",
       "status": "active",
-      "order_id": "4217451251",
+      "order_id": "4217502018",
       "is_replacement": false
     },
     {
-      "price": 118.91,
+      "price": 118.43,
       "side": "buy",
       "status": "active",
-      "order_id": "4217451258",
+      "order_id": "4217502029",
       "is_replacement": false
     },
     {
-      "price": 119.22,
+      "price": 118.73,
       "side": "buy",
       "status": "active",
-      "order_id": "4217451268",
+      "order_id": "4217502037",
       "is_replacement": false
     },
     {
-      "price": 119.84,
+      "price": 119.03,
+      "side": "buy",
+      "status": "pending",
+      "order_id": null,
+      "is_replacement": false
+    },
+    {
+      "price": 119.63,
       "side": "sell",
       "status": "active",
-      "order_id": "4217451275",
+      "order_id": "4217502049",
       "is_replacement": false
     },
     {
-      "price": 120.15,
+      "price": 119.93,
       "side": "sell",
       "status": "active",
-      "order_id": "4217451286",
+      "order_id": "4217502060",
       "is_replacement": false
     },
     {
-      "price": 120.46,
+      "price": 120.23,
       "side": "sell",
       "status": "active",
-      "order_id": "4217451289",
+      "order_id": "4217502072",
       "is_replacement": false
     },
     {
-      "price": 120.77,
+      "price": 120.53,
+      "side": "sell",
+      "status": "active",
+      "order_id": "4217502090",
+      "is_replacement": false
+    },
+    {
+      "price": 120.83,
       "side": "sell",
       "status": "pending",
       "order_id": null,
@@ -67,5 +81,5 @@
   ],
   "processed_fills": [],
   "processed_fills_history": [],
-  "last_updated": 1791213652.3206036
+  "last_updated": 1791220212.9746413
 }

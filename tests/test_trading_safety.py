@@ -296,7 +296,8 @@ class TradingSafetyTests(unittest.TestCase):
         self.assertFalse(is_stablecoin_pair("BTC/USDT"))
         self.assertEqual(effective_leverage("USDC/USDT", 5), 10)
         self.assertEqual(effective_leverage("SOL/USDT", 5), 5)
-        self.assertEqual(effective_leverage("SOL/USDT", 10), 5)
+        self.assertEqual(effective_leverage("SOL/USDT", 10), 10)
+        self.assertEqual(effective_leverage("SOL/USDT", 25), 20)
         self.assertEqual(get_smart_max_position(1_000.0), 600.0)
         self.assertEqual(
             BinanceClient({"symbol": "USDC/USDT", "leverage": 5}, self.logger).config[
@@ -535,13 +536,14 @@ class TradingSafetyTests(unittest.TestCase):
                 os.chdir(previous_cwd)
 
         self.assertLess(engine.quantity, 4_500.0)
+        notional_budget = 600.0 * config["leverage"]
         self.assertLessEqual(
             sum(o["amount"] * o["price"] for o in client.placed_orders if o["side"] == "sell"),
-            600.0,
+            notional_budget,
         )
         self.assertLessEqual(
             sum(o["amount"] * o["price"] for o in client.placed_orders if o["side"] == "buy"),
-            600.0,
+            notional_budget,
         )
 
     def test_balance_failures_do_not_return_fabricated_funds(self):
@@ -626,6 +628,54 @@ class TradingSafetyTests(unittest.TestCase):
 
         self.assertEqual(client.actual_leverage, 20)
         self.assertEqual(client.config["leverage"], 20)
+
+    def test_manual_quantity_and_10x_leverage_not_overridden(self):
+        client = FakeClient()
+        client.balance = 17_766.58
+        client.get_price = lambda: 119.34
+        client.get_symbol_info = lambda: {
+            "tick_size": 2,
+            "lot_size": 2,
+            "min_qty": 0.01,
+            "min_notional": 5.0,
+        }
+
+        config = {
+            "symbol": "SOL/USDT",
+            "grid_levels": 10,
+            "spacing_mode": "percent",
+            "grid_spacing_percent": 0.25,
+            "quantity_per_grid": 60.0,
+            "leverage": 10,
+            "max_loss_usdt": 1000.0,
+            "max_position_balance_percent": 60.0,
+            "max_position_usdt": 0.0,
+            "exchange_fee_rate": 0.0005,
+        }
+
+        risk = RiskManager(config, client, self.logger)
+        risk.initialize()
+
+        with tempfile.TemporaryDirectory(prefix="gridbot-manual-grid-") as temp_dir:
+            previous_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                engine = GridEngine(config, client, risk, self.logger)
+                engine.initialize()
+            finally:
+                os.chdir(previous_cwd)
+
+        # Manual quantity 60.0 must NOT be reduced to 17.64
+        self.assertEqual(engine.quantity, 60.0)
+        # All 10 orders must be placed without blocking
+        self.assertEqual(len(client.placed_orders), 10)
+        sell_orders = [o for o in client.placed_orders if o["side"] == "sell"]
+        buy_orders = [o for o in client.placed_orders if o["side"] == "buy"]
+        self.assertEqual(len(sell_orders), 5)
+        self.assertEqual(len(buy_orders), 5)
+        # Total buy notional ~35,500; required margin at 10x ~3,550 <= 60% of $17,766 ($10,659)
+        buy_notional = sum(o["amount"] * o["price"] for o in buy_orders)
+        self.assertLessEqual(buy_notional / config["leverage"], 17_766.58 * 0.60)
 
 
 if __name__ == "__main__":

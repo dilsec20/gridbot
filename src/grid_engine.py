@@ -290,7 +290,14 @@ class GridEngine:
 
         # Clamp stale/configured quantity so one complete grid side fits the live cap.
         available_balance = float(self.client.get_balance())
-        max_position_notional = position_budget(available_balance, self.config)
+        actual_lev = float(
+            getattr(self.client, "actual_leverage", None)
+            or self.config.get("leverage", 1)
+            or 1
+        )
+        max_position_notional = position_budget(
+            available_balance, self.config, leverage=actual_lev
+        )
         orders_per_side = max(1, self.grid_levels_count // 2)
         worst_grid_price = self.current_price + orders_per_side * self.grid_spacing
         max_quantity = max_position_notional / (orders_per_side * worst_grid_price)

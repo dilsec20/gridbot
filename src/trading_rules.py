@@ -26,8 +26,8 @@ def is_stablecoin_pair(symbol: str) -> bool:
     return len(assets) == 2 and all(asset.upper() in STABLECOIN_ASSETS for asset in assets)
 
 
-def effective_leverage(symbol: str, configured_leverage: float = 5) -> int:
-    """Use fixed 10x for stablecoin pairs and cap other pairs at 5x."""
+def effective_leverage(symbol: str, configured_leverage: float = 5, max_allowed: int = 20) -> int:
+    """Use 10x for stablecoin pairs; allow user-configured leverage up to max_allowed (default 20x)."""
     if is_stablecoin_pair(symbol):
         return 10
 
@@ -35,11 +35,13 @@ def effective_leverage(symbol: str, configured_leverage: float = 5) -> int:
         leverage = int(configured_leverage)
     except (TypeError, ValueError, OverflowError):
         leverage = 5
-    return min(5, max(1, leverage))
+    return min(max_allowed, max(1, leverage))
 
 
-def position_budget(balance: float, config: dict) -> float:
-    """Cap grid notional at 60% of wallet balance and any smaller hard USD cap."""
+def position_budget(
+    balance: float, config: dict, leverage: float | None = None
+) -> float:
+    """Cap grid notional at 60% of wallet balance multiplied by leverage (or smaller hard USD cap)."""
     available_balance = max(0.0, float(balance))
     allocation_percent = float(
         config.get(
@@ -53,11 +55,19 @@ def position_budget(balance: float, config: dict) -> float:
     allocation_percent = min(
         MAX_POSITION_ALLOCATION_PERCENT, max(0.0, allocation_percent)
     )
-    budget = available_balance * allocation_percent / 100.0
+    margin_budget = available_balance * allocation_percent / 100.0
+
+    if leverage is None:
+        try:
+            leverage = float(config.get("leverage", 1) or 1)
+        except (TypeError, ValueError, OverflowError):
+            leverage = 1.0
+
+    notional_budget = margin_budget * max(1.0, float(leverage))
 
     configured_cap = float(config.get("max_position_usdt", 0) or 0)
     if not math.isfinite(configured_cap):
         raise ValueError("Maximum position amount must be finite.")
     if configured_cap > 0:
-        budget = min(budget, configured_cap)
-    return budget
+        return min(notional_budget, configured_cap)
+    return notional_budget
