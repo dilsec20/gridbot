@@ -330,10 +330,12 @@ class GridEngine:
         try:
             open_orders = self.client.get_open_orders()
             if open_orders:
-                matching_orders = [o for o in open_orders if o.get("symbol") == self.symbol]
+                clean_sym = lambda s: str(s or '').split(':')[0]
+                matching_orders = [o for o in open_orders if clean_sym(o.get("symbol")) == clean_sym(self.symbol)]
                 if not matching_orders:
-                    detected_symbol = open_orders[0].get("symbol")
-                    if detected_symbol:
+                    raw_detected = open_orders[0].get("symbol")
+                    if raw_detected:
+                        detected_symbol = clean_sym(raw_detected)
                         self.logger.system(f"🔍 Auto-detected active trade coin on Binance: {detected_symbol}! Auto-switching symbol: {self.symbol} → {detected_symbol}")
                         self.symbol = detected_symbol
                         self.config["symbol"] = detected_symbol
@@ -341,7 +343,7 @@ class GridEngine:
                         # Re-fetch price & symbol info for newly detected symbol
                         self.current_price = self.client.get_price()
                         symbol_info = self.client.get_symbol_info()
-                        matching_orders = open_orders
+                        matching_orders = [o for o in open_orders if clean_sym(o.get("symbol")) == detected_symbol]
 
                 if matching_orders:
                     if len(matching_orders) >= (self.grid_levels_count - 2):

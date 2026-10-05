@@ -25,7 +25,7 @@ class BinanceWSClient:
         self.logger = logger
         self.perf_tracker = perf_tracker
 
-        self.symbol = config.get("symbol", "BTC/USDT")
+        self.symbol = str(config.get("symbol", "BTC/USDT")).split(":")[0]
         self.formatted_symbol = self.symbol.replace("/", "").lower()
 
         mode = trading_mode(config)

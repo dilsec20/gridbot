@@ -359,8 +359,11 @@ class QuantEngine:
             quantity = target_quantity
 
             if isinstance(lot_size, int):
-                scale = 10 ** max(0, lot_size)
-                quantity = math.floor(quantity * scale) / scale
+                if lot_size == 0:
+                    quantity = int(math.floor(quantity))
+                else:
+                    scale = 10 ** max(0, lot_size)
+                    quantity = round(math.floor(quantity * scale) / scale, lot_size)
 
             min_notional = float(symbol_info.get("min_notional", 5.0) or 5.0)
             if quantity < min_qty or quantity * current_price < min_notional:

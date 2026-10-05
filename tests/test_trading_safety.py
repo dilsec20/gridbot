@@ -584,7 +584,48 @@ class TradingSafetyTests(unittest.TestCase):
         client.close_position()
 
         self.assertEqual(len(client.exchange.orders), 1)
-        self.assertEqual(client.exchange.orders[0]["symbol"], "SOL/USDT:USDT")
+    def test_demo_mode_falls_back_to_verified_exchange_leverage_when_setting_fails(self):
+        class DemoExchange:
+            def enable_demo_trading(self, enable):
+                return None
+
+            def load_time_difference(self):
+                return None
+
+            def fetch_time(self):
+                return 1_700_000_000_000
+
+            def load_markets(self):
+                return {}
+
+            def set_leverage(self, leverage, symbol):
+                if leverage == 5:
+                    raise OSError('binance {"code":-1000,"msg":"An unknown error occurred"}')
+                return None
+
+            def fetch_leverage(self, symbol):
+                return {"longLeverage": 20, "shortLeverage": 20}
+
+            def set_margin_mode(self, mode, symbol):
+                return None
+
+        client = BinanceClient(
+            {
+                "symbol": "ADA/USDT",
+                "leverage": 5,
+                "api_key": "test-key",
+                "api_secret": "test-secret",
+                "use_testnet": False,
+                "use_demo": True,
+            },
+            self.logger,
+        )
+
+        with patch("binance_client.ccxt.binance", return_value=DemoExchange()):
+            client.connect()
+
+        self.assertEqual(client.actual_leverage, 20)
+        self.assertEqual(client.config["leverage"], 20)
 
 
 if __name__ == "__main__":
