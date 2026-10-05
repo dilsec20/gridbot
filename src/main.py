@@ -161,7 +161,7 @@ class GridTradingBot:
                 if now - last_risk >= risk_interval:
                     if not self.risk_manager.perform_safety_check():
                         self.logger.risk("⛔ RISK LIMIT BREACHED — EMERGENCY SHUTDOWN")
-                        self.shutdown()
+                        self.shutdown(close_position=True)
                         return
                     last_risk = now
 
@@ -189,7 +189,7 @@ class GridTradingBot:
                 self.logger.error(f"Error in main loop: {e}")
                 time.sleep(5)  # Wait before retrying
 
-    def shutdown(self):
+    def shutdown(self, close_position: bool = False):
         """Graceful shutdown — cancel all orders and print summary."""
         self.is_running = False
 
@@ -199,6 +199,8 @@ class GridTradingBot:
 
         # Cancel all open orders
         self.grid_engine.cancel_all()
+        if close_position:
+            self.client.close_position(self.config["symbol"])
 
         # Print final summary
         stats = self.grid_engine.get_stats()

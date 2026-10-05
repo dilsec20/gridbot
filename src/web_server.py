@@ -589,6 +589,7 @@ def run_bot(config):
 
     # Create a dashboard-aware logger that sends logs to the browser
     logger = DashboardLogger(config.get('log_file', 'trades.log'))
+    risk_limit_breached = False
 
     try:
         bot_running = True
@@ -669,8 +670,6 @@ def run_bot(config):
             grid_engine.process_order_fill_id(fill_data)
             send_grid_update(grid_engine)
             send_stats_update(grid_engine, client, risk_manager)
-            if perf_tracker:
-                perf_tracker.record_fill(grid_engine.quantity * (grid_engine.current_price or 1.0))
 
         ws_client.start(on_price_update=handle_ws_price, on_order_fill=handle_ws_fill)
 
@@ -741,6 +740,7 @@ def run_bot(config):
             # Risk check
             if not risk_manager.perform_safety_check():
                 logger.risk("⛔ MAX LOSS BREACHED — EMERGENCY SHUTDOWN")
+                risk_limit_breached = True
                 tg.notify_risk_warning(f"MAX LOSS BREACHED on {config['symbol']}! Emergency shutdown triggered.")
                 break
 
@@ -821,8 +821,6 @@ def run_bot(config):
                         new_notional = new_qty * new_price if new_price > 0 else 0
                         new_grid_lvls = config.get('grid_levels', 10)
                         config['max_position_usdt'] = get_smart_max_position(fresh_balance, new_leverage, new_notional, new_grid_lvls)
-                    config['max_loss_usdt'] = round(max(10.0, fresh_balance * 0.15), 2)
-
                     # 5. Reinitialize client for new symbol
                     client.symbol = new_symbol
                     try:
@@ -883,6 +881,11 @@ def run_bot(config):
             grid_engine.cancel_all()
         except Exception:
             pass
+        if risk_limit_breached and 'client' in locals():
+            try:
+                client.close_position(config.get('symbol'))
+            except Exception as e:
+                logger.error(f"Failed to close position after max-loss shutdown: {e}")
 
         stats = {}
         try:
@@ -894,12 +897,20 @@ def run_bot(config):
         try:
             time.sleep(1)  # Allow exchange to reflect canceled order margin release
             fresh_balance = client.get_wallet_balance()
+            position = client.get_position()
+            position_info = "No position"
+            if float(position.get("size", 0) or 0) != 0:
+                position_info = (
+                    f"{position.get('side', 'unknown').upper()} "
+                    f"{abs(float(position['size']))} @ "
+                    f"{fmt_price(float(position.get('entry_price', 0) or 0))}"
+                )
             socketio.emit('stats_update', {
                 'realized_pnl': stats.get('pnl', 0),
-                'unrealized_pnl': 0,
+                'unrealized_pnl': position.get('unrealized_pnl', 0),
                 'cycles': stats.get('cycles', 0),
                 'balance': fresh_balance,
-                'position_info': 'No position',
+                'position_info': position_info,
             })
         except Exception:
             pass

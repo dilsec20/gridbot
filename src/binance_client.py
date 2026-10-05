@@ -121,23 +121,19 @@ class BinanceClient:
         return 0.0001
 
     def get_balance(self) -> float:
-        """Get total USDT margin balance (Equity) with resilient failover cache."""
+        """Get current free USDT margin available for new orders."""
         try:
             balance = self.exchange.fetch_balance()
             usdt = balance.get("USDT", {})
-            total = float(usdt.get("total", 0))
-            if total > 0:
-                self._cached_balance = total
-                return total
-            free = float(usdt.get("free", 0))
-            if free > 0:
-                self._cached_balance = free
-                return free
-            return getattr(self, "_cached_balance", 5000.0)
+            free = usdt.get("free")
+            if free is not None:
+                return max(0.0, float(free))
+            total = usdt.get("total")
+            if total is not None:
+                return max(0.0, float(total))
+            raise RuntimeError("Binance did not return free or total USDT balance.")
         except Exception as e:
-            if hasattr(self, "_cached_balance") and self._cached_balance > 0:
-                return self._cached_balance
-            return 5000.0
+            raise RuntimeError(f"Failed to fetch current USDT margin balance: {e}") from e
 
     def get_wallet_balance(self) -> float:
         """Get raw USDT Wallet Cash Balance (excluding floating unrealized PnL)."""
@@ -147,22 +143,19 @@ class BinanceClient:
             assets = info.get("assets", [])
             for a in assets:
                 if a.get("asset") == "USDT":
-                    wb = float(a.get("walletBalance", 0) or 0)
-                    if wb > 0:
-                        self._cached_wallet_balance = wb
-                        return wb
+                    wallet_balance = a.get("walletBalance")
+                    if wallet_balance is not None:
+                        return max(0.0, float(wallet_balance))
             usdt = balance.get("USDT", {})
-            free = float(usdt.get("free", 0) or 0)
-            if free > 0:
-                self._cached_wallet_balance = free
-                return free
-            total = float(usdt.get("total", 0) or 0)
-            if total > 0:
-                self._cached_wallet_balance = total
-                return total
-            return getattr(self, "_cached_wallet_balance", 5000.0)
-        except Exception:
-            return getattr(self, "_cached_wallet_balance", 5000.0)
+            total = usdt.get("total")
+            if total is not None:
+                return max(0.0, float(total))
+            free = usdt.get("free")
+            if free is not None:
+                return max(0.0, float(free))
+            raise RuntimeError("Binance did not return a USDT wallet balance.")
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch current USDT wallet balance: {e}") from e
 
     def get_position(self) -> dict:
         """Get current position for the symbol with retry and cached fallback."""
@@ -202,15 +195,25 @@ class BinanceClient:
                 self.logger.warn(f"Transient position fetch issue (using cached state): {e}")
                 return self._cached_position
 
-    def close_position(self) -> dict | None:
-        """Market close ALL open positions across the entire Binance account."""
+    @staticmethod
+    def _canonical_symbol(symbol: str) -> str:
+        """Normalize Binance and CCXT futures symbols to the same base symbol."""
+        return str(symbol).upper().replace(":USDT", "").replace("/", "")
+
+    def close_position(self, symbol: str | None = None) -> dict | None:
+        """Close the bot's open position for one symbol."""
         try:
+            target_symbol = symbol or self.symbol
+            canonical_target = self._canonical_symbol(target_symbol)
             positions = self.exchange.fetch_positions()
             closed_orders = []
             for pos in positions:
+                pos_symbol = str(pos.get("symbol", ""))
+                if self._canonical_symbol(pos_symbol) != canonical_target:
+                    continue
                 contracts = float(pos.get("contracts", 0) or 0)
                 if contracts > 0:
-                    sym = pos["symbol"]
+                    sym = pos_symbol
                     side = pos.get("side", "none").lower()
                     close_side = "sell" if side in ["long", "buy"] else "buy"
                     self.logger.system(f"Closing {side.upper()} position on {sym}: {contracts} contracts...")
@@ -246,12 +249,12 @@ class BinanceClient:
                             side=close_side,
                             amount=abs(contracts),
                             price=price,
-                            params={"reduceOnly": True},
+                            params={"reduceOnly": True, "timeInForce": "IOC"},
                         )
                         closed_orders.append(order)
 
             if closed_orders:
-                self.logger.system(f"Position closed successfully! Floating profit locked into wallet balance.")
+                self.logger.system("Position close order submitted for the bot symbol.")
                 return closed_orders[0]
             else:
                 self.logger.system("No open position to close.")
@@ -260,18 +263,23 @@ class BinanceClient:
             self.logger.error(f"Failed to close position: {e}")
             return None
 
-    def trim_position(self, percentage: float = 50.0) -> dict | None:
+    def trim_position(self, percentage: float = 50.0, symbol: str | None = None) -> dict | None:
         """
         EMERGENCY EXPOSURE CONTROL: Trim open position by X% (default 50%).
         Cuts position exposure in half to prevent margin ratio escalation & liquidation.
         """
         try:
+            target_symbol = symbol or self.symbol
+            canonical_target = self._canonical_symbol(target_symbol)
             positions = self.exchange.fetch_positions()
             trimmed_orders = []
             for pos in positions:
+                pos_symbol = str(pos.get("symbol", ""))
+                if self._canonical_symbol(pos_symbol) != canonical_target:
+                    continue
                 contracts = float(pos.get("contracts", 0) or 0)
                 if contracts > 0:
-                    sym = pos["symbol"]
+                    sym = pos_symbol
                     side = pos.get("side", "none").lower()
                     close_side = "sell" if side in ["long", "buy"] else "buy"
                     trim_amount = round(contracts * (percentage / 100.0), 4)
@@ -346,7 +354,9 @@ class BinanceClient:
                     params=params,
                 )
 
-                self.logger.trade(side, price, quantity)
+                self.logger.info(
+                    f"Limit order placed: {side.upper()} {quantity} @ {fmt_price(price)}"
+                )
                 return order
 
             except ccxt.InvalidOrder as e:
@@ -387,7 +397,6 @@ class BinanceClient:
                     amount=quantity,
                     params=params,
                 )
-                self.logger.trade(side.upper(), float(order.get("price") or 0.0), quantity)
                 return order
 
             except ccxt.InvalidOrder as e:
@@ -424,7 +433,7 @@ class BinanceClient:
             return True
         except ccxt.OrderNotFound:
             self.logger.warn(f"Order {order_id} not found (may be already filled/cancelled)")
-            return True
+            return False
         except Exception as e:
             self.logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
@@ -446,7 +455,7 @@ class BinanceClient:
             return orders
         except Exception as e:
             self.logger.error(f"Failed to fetch open orders: {e}")
-            return []
+            raise
 
     def _parse_precision(self, val, default=4) -> int:
         if isinstance(val, int):
@@ -631,4 +640,3 @@ class BinanceClient:
         except Exception as e:
             self.logger.warn(f"Failed to ping listenKey: {e}")
             return False
-

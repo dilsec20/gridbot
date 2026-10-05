@@ -133,6 +133,7 @@ class QuantEngine:
 
     def __init__(self, client):
         self.client = client
+        self.config = getattr(client, "config", {})
 
     def analyze_symbol(self, symbol: str) -> Dict[str, Any]:
         """
@@ -299,7 +300,15 @@ class QuantEngine:
                 k = 0.50   # Wider safety grid for higher trend momentum (ADX >= 20)
 
             recommended_spacing_percent = (atr_percent * k)
-            recommended_spacing_percent = max(0.15, min(3.5, round(recommended_spacing_percent, 2)))
+            configured_fee_rate = float(
+                self.config.get("exchange_fee_rate", 0.0005) or 0.0005
+            )
+            fee_safe_spacing_percent = configured_fee_rate * 4.0 * 100.0
+            recommended_spacing_percent = max(
+                fee_safe_spacing_percent,
+                0.15,
+                min(3.5, round(recommended_spacing_percent, 2)),
+            )
             recommended_spacing_usdt = round(current_price * (recommended_spacing_percent / 100.0), 6)
 
             # 5. Number of Grid Levels
@@ -317,16 +326,16 @@ class QuantEngine:
                 recommended_leverage = 10
             else:
                 recommended_leverage = 5
+            configured_leverage = int(self.config.get("leverage", 5) or 5)
+            recommended_leverage = min(recommended_leverage, max(1, configured_leverage))
 
-            # 7. Fetch Live Balance & Auto-Scale Quantity to 90% Wallet Utilization
-            balance = 100.0
-            try:
-                balance = float(self.client.get_wallet_balance() or 100.0)
-            except Exception:
-                pass
+            # 7. Size orders from available margin and configured exposure limits.
+            balance = float(self.client.get_balance())
+            if balance <= 0:
+                raise ValueError("No free USDT margin is available for an AI recommendation.")
 
-            # Calculate target margin per grid level so total margin = 45% of wallet equity (leaves 55% liquid buffer)
-            target_total_margin = balance * 0.45
+            # Keep most funds liquid; the account may have unrelated open positions/orders.
+            target_total_margin = balance * 0.25
             target_margin_per_level = target_total_margin / grid_levels if grid_levels > 0 else 10.0
             target_notional_per_level = target_margin_per_level * recommended_leverage
 
@@ -340,19 +349,35 @@ class QuantEngine:
                 quantity = min_qty
 
             if isinstance(lot_size, int):
-                if lot_size == 0:
-                    quantity = float(int(round(quantity)))
-                else:
-                    quantity = float(round(quantity, lot_size))
+                scale = 10 ** max(0, lot_size)
+                quantity = math.floor(quantity * scale) / scale
 
-            # Risk Shields (Max Loss = 15% wallet equity)
-            max_loss_usdt = round(max(10.0, balance * 0.15), 2)
-            # Max Position: allow half buy-side grid to fill, capped at 50% leveraged equity for liquidation safety
+            # Respect the user's hard limits instead of raising them to a wallet percentage.
+            configured_max_loss = float(self.config.get("max_loss_usdt", 0) or 0)
+            max_loss_usdt = round(
+                configured_max_loss if configured_max_loss > 0 else max(10.0, balance * 0.02),
+                2,
+            )
             order_notional = quantity * current_price if current_price > 0 else 0
             half_buy_levels = max(1, grid_levels // 2)
-            max_equity_cap = balance * recommended_leverage * 0.50
+            max_equity_cap = balance * recommended_leverage * 0.20
             grid_based_max = order_notional * min(half_buy_levels, 4)
-            max_position_usdt = round(max(50.0, min(grid_based_max, max_equity_cap)), 2)
+            configured_max_position = float(
+                self.config.get("max_position_usdt", 0) or 0
+            )
+            max_position_usdt = round(
+                min(configured_max_position, max_equity_cap)
+                if configured_max_position > 0
+                else min(grid_based_max, max_equity_cap),
+                2,
+            )
+            max_order_notional = max_position_usdt / half_buy_levels
+            max_quantity_by_position = (
+                max_order_notional / current_price if current_price > 0 else min_qty
+            )
+            quantity = min(quantity, max_quantity_by_position)
+            if quantity < min_qty:
+                quantity = min_qty
 
             # 8. Institutional Confidence & Daily ROI Predictions
             ranging_probability = int(round(max(50.0, 100.0 - (adx * 1.0) - abs(rsi - 50.0))))
@@ -409,11 +434,20 @@ class QuantEngine:
 
     def _fallback_recommendation(self, symbol: str, err: str = "") -> Dict[str, Any]:
         """Fallback recommendation when OHLCV is unavailable."""
+        config = self.config
         price = 1.0
         try:
             price = self.client.get_price_for(symbol)
         except Exception:
             pass
+        grid_levels = 10
+        max_position_usdt = float(config.get("max_position_usdt", 50.0) or 50.0)
+        max_loss_usdt = float(config.get("max_loss_usdt", 10.0) or 10.0)
+        configured_leverage = int(config.get("leverage", 5) or 5)
+        quantity = min(
+            25.0 / price if price > 0 else 1.0,
+            max_position_usdt / (max(1, grid_levels // 2) * price) if price > 0 else 1.0,
+        )
 
         return {
             "symbol": symbol,
@@ -430,14 +464,14 @@ class QuantEngine:
             "regime": "Optimal Ranging Grid",
             "trend_bias": "Neutral Oscillation",
             "bollinger": {"middle": price, "upper": price * 1.03, "lower": price * 0.97},
-            "grid_levels": 10,
+            "grid_levels": grid_levels,
             "spacing_mode": "percent",
             "grid_spacing_percent": 0.5,
             "grid_spacing_usdt": round(price * 0.005, 4),
-            "quantity": max(round(25.0 / price, 2) if price > 0 else 1.0, 0.001),
-            "recommended_leverage": 5,
-            "max_loss_usdt": 15.0,
-            "max_position_usdt": 250.0,
+            "quantity": max(round(quantity, 6), 0.001),
+            "recommended_leverage": max(1, min(5, configured_leverage)),
+            "max_loss_usdt": max_loss_usdt,
+            "max_position_usdt": max_position_usdt,
             "est_cycle_roi": 0.6,
             "est_cycles_per_hour": 4.0,
             "est_daily_return_min": 2.5,

@@ -138,7 +138,7 @@ When you open **`http://localhost:5000`**, here is what every section means:
 This bot includes institutional-grade safety mechanisms to protect your capital:
 
 1. **Hard Max Loss Shield (`max_loss_usdt`)**:
-   - If total account loss ever touches your pre-set limit (e.g. $50.00), the Risk Manager executes an emergency shutdown, cancels all open grid orders, and closes positions via market orders.
+   - On a loss-limit trigger, cancels bot orders and attempts to close the bot's configured symbol. Ordinary manual stops leave positions open. A stop is not a guarantee against slippage, liquidation, or losses occurring between checks.
 
 2. **High-Water Mark Trailing Profit Protection (`peak_pnl`)**:
    - Protects earned profits. If your session profit peaks at +$100.00 and market pulls back by $50.00, the bot stops and locks in the remaining +$50.00 net cash profit!
@@ -150,7 +150,12 @@ This bot includes institutional-grade safety mechanisms to protect your capital:
    - Automatically reinvests earned cash profits to incrementally scale order lot sizes over time.
 
 5. **Self-Healing Order Reconciliation Audit**:
-   - Audits local order memory against Binance's live order book every 5 seconds. If network latency creates "Ghost" or "Un-tracked" orders, it auto-reconciles them in <50ms and prints an **Order Reconciliation Report**.
+   - Reconciles local orders against Binance. A missing order is treated as a fill only after Binance reports it closed; canceled or unverified orders are not credited as trades.
+
+6. **Exposure and Fill Accounting**:
+   - The position cap includes currently open orders and the proposed order, and available free margin is checked before opening exposure.
+   - Cycle PnL uses recorded entry and exit fill prices, order quantity, and the configured fee estimate. Market-order slippage and actual exchange fee tiers can still make realized results differ.
+   - AI sizing respects the configured leverage, max-position, and max-loss values, uses a liquid-margin buffer, and floors suggested spacing above the configured fee estimate. Recommendations are estimates, not profit guarantees.
 
 ---
 
@@ -363,4 +368,3 @@ python src/web_server.py
 
 ### ⚠️ Disclaimer
 *This trading bot is provided for educational and quantitative research purposes. Cryptocurrency futures trading involves significant financial risk. Always test thoroughly on Binance Demo/Testnet before deploying real capital.*
-

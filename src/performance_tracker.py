@@ -10,6 +10,8 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+from grid_engine import GridOrderStatus
+
 
 class PerformanceTracker:
     """
@@ -161,24 +163,18 @@ class PerformanceTracker:
                         if level:
                             affected_side = level.side.value.upper()
                             affected_price = level.price
-                            # Process the fill (marks level as FILLED)
-                            grid_engine.process_order_fill_id(oid)
-                            recovered = True
-                            affected_id = oid
-
-                        # Always remove from known_order_ids & order_to_level to prevent re-detection
-                        grid_engine._known_order_ids.discard(oid)
-                        grid_engine._known_order_ids.discard(str(oid))
-                        try:
-                            grid_engine._known_order_ids.discard(int(oid))
-                        except Exception:
-                            pass
-                        grid_engine._order_to_level.pop(oid, None)
-                        grid_engine._order_to_level.pop(str(oid), None)
-                        try:
-                            grid_engine._order_to_level.pop(int(oid), None)
-                        except Exception:
-                            pass
+                            order_details = self.client.fetch_order(str(oid))
+                            if not order_details:
+                                continue
+                            order_status = str(order_details.get("status", "")).lower()
+                            if order_status == "closed":
+                                grid_engine.process_order_fill_id(order_details)
+                                recovered = True
+                                affected_id = oid
+                            elif order_status in ("canceled", "cancelled", "expired", "rejected"):
+                                level.status = GridOrderStatus.CANCELLED
+                                grid_engine._known_order_ids.discard(str(oid))
+                                grid_engine._order_to_level.pop(str(oid), None)
 
                     # Reset consecutive counter after successful healing
                     self._consecutive_desync_count = 0

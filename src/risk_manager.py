@@ -71,17 +71,54 @@ class RiskManager:
 
         return True
 
-    def check_position_limit(self) -> bool:
+    def check_position_limit(
+        self, side: str = "", quantity: float = 0.0, price: float = 0.0
+    ) -> bool:
         """
-        Check if current position size is within limits.
-        Returns True if safe, False if position is too large.
+        Check the largest one-sided exposure if pending orders and this order fill.
         """
         position = self.client.get_position()
-        notional = abs(position.get("notional", 0))
+        pos_side = str(position.get("side", "none")).lower()
+        pos_size = float(position.get("size", 0) or 0)
+        pos_notional = abs(float(position.get("notional", 0) or 0))
+        if pos_notional == 0 and pos_size != 0:
+            pos_notional = abs(pos_size) * float(price or 0)
+
+        if pos_side in ("short", "sell") or pos_size < 0:
+            signed_position = -pos_notional
+        elif pos_side in ("long", "buy") or pos_size > 0:
+            signed_position = pos_notional
+        else:
+            signed_position = 0.0
+
+        pending_buys = 0.0
+        pending_sells = 0.0
+        for order in self.client.get_open_orders():
+            order_side = str(order.get("side", "")).lower()
+            order_price = float(order.get("price", 0) or 0)
+            order_amount = float(order.get("remaining") or order.get("amount") or 0)
+            order_notional = float(order.get("cost", 0) or order_amount * order_price)
+            if order_side == "buy":
+                pending_buys += order_notional
+            elif order_side == "sell":
+                pending_sells += order_notional
+
+        candidate_notional = max(0.0, float(quantity)) * max(0.0, float(price))
+        if side.lower() == "buy":
+            pending_buys += candidate_notional
+        elif side.lower() == "sell":
+            pending_sells += candidate_notional
+
+        # A one-way futures position can only be long or short at a time.
+        notional = max(
+            abs(signed_position + pending_buys),
+            abs(signed_position - pending_sells),
+        )
 
         if notional > self.max_position_usdt:
             self.logger.risk(
-                f"Position limit reached: ${notional:,.2f} > ${self.max_position_usdt:,.2f}"
+                f"Projected position limit reached: ${notional:,.2f} > "
+                f"${self.max_position_usdt:,.2f} (includes pending orders)"
             )
             return False
 
@@ -108,21 +145,31 @@ class RiskManager:
 
         # A SELL order on a LONG position, or a BUY order on a SHORT position REDUCES position size.
         # Position-reducing orders must NEVER be blocked by position limits!
+        order_size = abs(float(quantity))
         is_reducing = (
-            (side.lower() == "sell" and is_long and abs(pos_size) > 0) or
-            (side.lower() == "buy" and is_short and abs(pos_size) > 0)
+            (side.lower() == "sell" and is_long and order_size <= abs(pos_size)) or
+            (side.lower() == "buy" and is_short and order_size <= abs(pos_size))
         )
 
         if not is_reducing:
             # Check position limit for position-expanding orders
-            if not self.check_position_limit():
-                self.logger.risk(f"Order blocked: position limit reached ({side} {quantity} @ ${price:,.2f})")
+            try:
+                within_limit = self.check_position_limit(side, quantity, price)
+            except Exception as e:
+                self.logger.error(f"Failed to verify projected position exposure: {e}")
+                return False
+            if not within_limit:
+                self.logger.risk(f"Order blocked: projected position limit reached ({side} {quantity} @ ${price:,.2f})")
                 return False
 
             # Check available balance
             try:
                 balance = self.client.get_balance()
-                required_margin = (quantity * price) / self.config.get("leverage", 5)
+                leverage = float(self.config.get("leverage", 5) or 5)
+                if leverage <= 0:
+                    self.logger.error(f"Invalid leverage configured for risk check: {leverage}")
+                    return False
+                required_margin = (quantity * price) / leverage
 
                 if balance < required_margin:
                     self.logger.risk(
@@ -188,7 +235,7 @@ class RiskManager:
             except Exception as e:
                 self.logger.error(f"Failed to fetch balance for compounding cap: {e}")
 
-            final_qty = max(base_qty, round(target_qty, 6))
+            final_qty = max(0.0, round(target_qty, 6))
             return final_qty
 
         except Exception as e:

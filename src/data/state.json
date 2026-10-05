@@ -1,0 +1,85 @@
+{
+  "symbol": "SOL/USDT",
+  "completed_cycles": 0,
+  "quantity": 71.293,
+  "grid_spacing": 0.32,
+  "lowest_buy_price": 121.58,
+  "highest_sell_price": 121.58,
+  "inventory_state": "normal",
+  "realized_pnl": 0.0,
+  "grid_levels_snapshot": [
+    {
+      "price": 119.98,
+      "side": "buy",
+      "status": "active",
+      "order_id": "4217244769",
+      "is_replacement": false
+    },
+    {
+      "price": 120.3,
+      "side": "buy",
+      "status": "active",
+      "order_id": "4217244776",
+      "is_replacement": false
+    },
+    {
+      "price": 120.62,
+      "side": "buy",
+      "status": "active",
+      "order_id": "4217244778",
+      "is_replacement": false
+    },
+    {
+      "price": 120.94,
+      "side": "buy",
+      "status": "active",
+      "order_id": "4217244785",
+      "is_replacement": false
+    },
+    {
+      "price": 121.26,
+      "side": "buy",
+      "status": "active",
+      "order_id": "4217244793",
+      "is_replacement": false
+    },
+    {
+      "price": 121.9,
+      "side": "sell",
+      "status": "active",
+      "order_id": "4217244800",
+      "is_replacement": false
+    },
+    {
+      "price": 122.22,
+      "side": "sell",
+      "status": "active",
+      "order_id": "4217244811",
+      "is_replacement": false
+    },
+    {
+      "price": 122.54,
+      "side": "sell",
+      "status": "active",
+      "order_id": "4217244816",
+      "is_replacement": false
+    },
+    {
+      "price": 122.86,
+      "side": "sell",
+      "status": "active",
+      "order_id": "4217244836",
+      "is_replacement": false
+    },
+    {
+      "price": 123.18,
+      "side": "sell",
+      "status": "active",
+      "order_id": "4217244842",
+      "is_replacement": false
+    }
+  ],
+  "processed_fills": [],
+  "processed_fills_history": [],
+  "last_updated": 1791185425.8535924
+}

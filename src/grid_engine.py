@@ -8,6 +8,7 @@ import time
 import json
 import os
 import bisect
+import math
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
@@ -44,10 +45,12 @@ class GridLevel:
     """Represents a single grid level with its order state."""
     price: float
     side: GridSide
+    quantity: float = 0.0
     status: GridOrderStatus = GridOrderStatus.PENDING
     order_id: Optional[str] = None
     filled_at: Optional[float] = None
     is_replacement: bool = False  # True = placed after a fill (completes a cycle when filled)
+    cycle_entry_price: float = 0.0
     index: int = 0
     peak_price: float = 0.0        # Highest price reached during trailing TP (SELL side)
     trailing_stop: float = 0.0     # Dynamic trailing stop trigger price (SELL side)
@@ -280,9 +283,13 @@ class GridEngine:
         # ─── Minimum Spacing Guard: Prevent Fee-Eaten Grids ───
         # Round-trip fee cost = 2 × fee_rate × price (buy fee + sell fee)
         # Spacing must exceed this to generate net profit per cycle
-        min_profitable_spacing = round(self.current_price * self.fee_rate * 3.0, self.tick_size)
+        spacing_scale = 10 ** self.tick_size
+        min_profitable_spacing = (
+            math.ceil(self.current_price * self.fee_rate * 4.0 * spacing_scale)
+            / spacing_scale
+        )
         fee_breakeven_spacing = round(self.current_price * self.fee_rate * 2.0, self.tick_size)
-        if self.grid_spacing <= fee_breakeven_spacing:
+        if self.grid_spacing < min_profitable_spacing:
             old_spacing = self.grid_spacing
             self.grid_spacing = min_profitable_spacing
             old_pct = (old_spacing / self.current_price) * 100.0 if self.current_price > 0 else 0
@@ -290,13 +297,7 @@ class GridEngine:
             self.logger.warn(
                 f"⚠️ SPACING TOO TIGHT! {old_pct:.3f}% (${old_spacing}) would be eaten by Binance fees "
                 f"(~${fee_breakeven_spacing} round-trip fee per cycle). "
-                f"Auto-adjusted to {new_pct:.3f}% (${self.grid_spacing}) to guarantee net profit per cycle."
-            )
-        elif self.grid_spacing < min_profitable_spacing:
-            fee_pct = (fee_breakeven_spacing / self.grid_spacing) * 100.0 if self.grid_spacing > 0 else 100
-            self.logger.warn(
-                f"⚠️ Low margin warning: ~{fee_pct:.0f}% of each cycle's profit goes to Binance fees. "
-                f"Consider increasing spacing above {(min_profitable_spacing / self.current_price * 100.0):.3f}% for healthier margins."
+                f"Auto-adjusted to {new_pct:.3f}% (${self.grid_spacing}) for a buffer over estimated fees."
             )
 
         self.logger.grid(f"Current {self.symbol} price: {self.current_price}")
@@ -350,13 +351,13 @@ class GridEngine:
         # BUY levels (lowest to highest)
         for i in reversed(range(half_levels)):
             price = round(self.current_price - ((i + 1) * self.grid_spacing), self.tick_size)
-            level = GridLevel(price=price, side=GridSide.BUY)
+            level = GridLevel(price=price, side=GridSide.BUY, quantity=self.quantity)
             self.grid_levels.append(level)
 
         # SELL levels (lowest to highest)
         for i in range(half_levels):
             price = round(self.current_price + ((i + 1) * self.grid_spacing), self.tick_size)
-            level = GridLevel(price=price, side=GridSide.SELL)
+            level = GridLevel(price=price, side=GridSide.SELL, quantity=self.quantity)
             self.grid_levels.append(level)
 
         self._reconcile_boundaries()
@@ -382,6 +383,7 @@ class GridEngine:
             level = GridLevel(
                 price=price,
                 side=side,
+                quantity=float(o.get("amount", self.quantity) or self.quantity),
                 status=GridOrderStatus.ACTIVE,
                 order_id=order_id,
                 is_replacement=False
@@ -439,6 +441,7 @@ class GridEngine:
         placed = 0
 
         for level in self.grid_levels:
+            level.quantity = self.quantity
             if not self.risk_manager.can_place_order(level.side.value, self.quantity, level.price):
                 self.logger.warn(f"Risk check blocked order at ${level.price:,.2f}")
                 continue
@@ -473,12 +476,25 @@ class GridEngine:
 
         try:
             open_orders = self.client.get_open_orders()
-            current_order_ids = {order["id"] for order in open_orders}
-            filled_order_ids = self._known_order_ids - current_order_ids
+            current_order_ids = {str(order["id"]) for order in open_orders}
+            filled_order_ids = {str(oid) for oid in self._known_order_ids} - current_order_ids
 
             for order_id in filled_order_ids:
                 level = self._order_to_level.get(order_id)
                 if level and level.status == GridOrderStatus.ACTIVE:
+                    order_details = None
+                    if hasattr(self.client, "fetch_order"):
+                        order_details = self.client.fetch_order(order_id)
+                        if not order_details:
+                            continue
+                        order_status = str(order_details.get("status", "")).lower()
+                        if order_status == "closed":
+                            self._handle_fill(level, fill_info=order_details)
+                        elif order_status in ("canceled", "cancelled", "expired", "rejected"):
+                            level.status = GridOrderStatus.CANCELLED
+                            self._known_order_ids.discard(order_id)
+                            self._order_to_level.pop(order_id, None)
+                        continue
                     self._handle_fill(level)
                 elif level and level.status in (GridOrderStatus.TRAILING_TP, GridOrderStatus.TRAILING_BUY):
                     # Order was cancelled by trailing TP/BUY activation — NOT a real fill.
@@ -495,7 +511,7 @@ class GridEngine:
     def process_order_fill_id(self, fill_input):
         """Process an order fill by order_id or fill_data dictionary."""
         if isinstance(fill_input, dict):
-            order_id = str(fill_input.get("order_id", ""))
+            order_id = str(fill_input.get("order_id") or fill_input.get("id", ""))
             fill_info = fill_input
         else:
             order_id = str(fill_input)
@@ -528,9 +544,28 @@ class GridEngine:
         trade_id = str(fill_info.get("trade_id", ""))
         client_order_id = str(fill_info.get("client_order_id", ""))
         fill_key = trade_id if trade_id else str(filled_level.order_id)
+        quantity = float(
+            fill_info.get("filled_quantity")
+            or fill_info.get("filled")
+            or filled_level.quantity
+            or self.quantity
+        )
+        fill_price = float(
+            fill_info.get("average_price")
+            or fill_info.get("average")
+            or execution_price
+            or fill_info.get("price")
+            or filled_level.price
+        )
+        if quantity <= 0 or fill_price <= 0:
+            self.logger.error(
+                f"Invalid fill details for order #{filled_level.order_id}: "
+                f"quantity={quantity}, price={fill_price}"
+            )
+            return
 
         with self._fill_lock:
-            # Check trade_id, order_id, and level status for 100% partial fill & exact-once execution safety
+            # Ignore duplicate reports after the full order has already been handled.
             if fill_key in self._processed_fills or filled_level.order_id in self._processed_fills or filled_level.status == GridOrderStatus.FILLED:
                 return
 
@@ -539,9 +574,24 @@ class GridEngine:
 
             now = time.time()
             if filled_level.is_replacement:
-                gross_profit = self.grid_spacing * self.quantity
-                notional = filled_level.price * self.quantity
-                cycle_profit = gross_profit - (notional * self.fee_rate * 2.0)
+                entry_price = filled_level.cycle_entry_price
+                if entry_price <= 0:
+                    self.logger.error(
+                        f"Cannot calculate realized PnL for order #{filled_level.order_id}: "
+                        "cycle entry price is missing."
+                    )
+                    self._processed_fills.discard(fill_key)
+                    self._processed_fills.discard(str(filled_level.order_id))
+                    return
+                gross_profit = (
+                    (fill_price - entry_price) * quantity
+                    if filled_level.side == GridSide.SELL
+                    else (entry_price - fill_price) * quantity
+                )
+                round_trip_fee = (
+                    (entry_price + fill_price) * quantity * self.fee_rate
+                )
+                cycle_profit = gross_profit - round_trip_fee
             else:
                 cycle_profit = 0.0
             audit_entry = {
@@ -551,8 +601,8 @@ class GridEngine:
                 "client_order_id": client_order_id,
                 "symbol": self.symbol,
                 "side": filled_level.side.value.upper(),
-                "price": filled_level.price,
-                "quantity": self.quantity,
+                "price": fill_price,
+                "quantity": quantity,
                 "processed_at": now,
                 "is_replacement": filled_level.is_replacement,
                 "cycle_pnl": cycle_profit
@@ -579,29 +629,25 @@ class GridEngine:
                 pass
 
         # Use actual execution price for trailing TP/BUY, fall back to grid level price
-        log_price = execution_price if execution_price else filled_level.price
-        self.logger.trade(filled_level.side.value.upper(), log_price, self.quantity)
+        self.logger.trade(filled_level.side.value.upper(), fill_price, quantity)
 
         # Fee tracking
-        fill_notional = filled_level.price * self.quantity
+        fill_notional = fill_price * quantity
         if hasattr(self.risk_manager, 'perf_tracker') and self.risk_manager.perf_tracker:
             self.risk_manager.perf_tracker.record_fill(fill_notional)
 
-        # Calculate replacement side and price
+        # Calculate the next limit from the actual fill, not the intended grid price.
         if filled_level.side == GridSide.BUY:
             new_side = GridSide.SELL
-            new_price = round(filled_level.price + self.grid_spacing, self.tick_size)
+            new_price = round(fill_price + self.grid_spacing, self.tick_size)
         else:
             new_side = GridSide.BUY
-            new_price = round(filled_level.price - self.grid_spacing, self.tick_size)
+            new_price = round(fill_price - self.grid_spacing, self.tick_size)
 
         if filled_level.is_replacement:
             self.completed_cycles += 1
-            gross_pnl = self.grid_spacing * self.quantity
-            # Deduct estimated round-trip exchange fees (buy + sell) for accurate net PnL
-            order_notional = filled_level.price * self.quantity
-            round_trip_fee = order_notional * self.fee_rate * 2.0  # fee on buy side + fee on sell side
-            cycle_pnl = gross_pnl - round_trip_fee
+            gross_pnl = gross_profit
+            cycle_pnl = cycle_profit
 
             self.risk_manager.add_realized_pnl(cycle_pnl)
             total_pnl = self.risk_manager.get_realized_pnl()
@@ -635,7 +681,7 @@ class GridEngine:
             self._save_state()
         else:
             self.logger.grid(
-                f"Initial {filled_level.side.value.upper()} filled at {fmt_price(filled_level.price)} — "
+                f"Initial {filled_level.side.value.upper()} filled at {fmt_price(fill_price)} — "
                 f"waiting for opposite fill to complete cycle..."
             )
 
@@ -676,9 +722,11 @@ class GridEngine:
                 new_level = GridLevel(
                     price=new_price,
                     side=new_side,
+                    quantity=self.quantity,
                     status=GridOrderStatus.ACTIVE,
                     order_id=order_id_str,
                     is_replacement=True,
+                    cycle_entry_price=fill_price,
                 )
                 self._order_to_level[order_id_str] = new_level
                 self._known_order_ids.add(order_id_str)
@@ -766,6 +814,7 @@ class GridEngine:
                         new_level = GridLevel(
                             price=new_price,
                             side=GridSide.BUY,
+                            quantity=self.quantity,
                             status=GridOrderStatus.ACTIVE,
                             order_id=order_id_str
                         )
@@ -806,6 +855,7 @@ class GridEngine:
                     new_level = GridLevel(
                         price=new_price,
                         side=GridSide.SELL,
+                        quantity=self.quantity,
                         status=GridOrderStatus.ACTIVE,
                         order_id=order_id_str
                     )
@@ -832,18 +882,15 @@ class GridEngine:
                     cancel_ok = False
                     if level.order_id:
                         try:
-                            self.client.cancel_order(level.order_id)
-                            cancel_ok = True
-                        except Exception:
-                            # Order was already filled/cancelled by Binance (e.g. sell limit below market)
-                            cancel_ok = False
+                            cancel_ok = self.client.cancel_order(level.order_id)
+                        except Exception as e:
+                            self.logger.error(f"Failed to cancel SELL order #{level.order_id}: {e}")
 
                     if not cancel_ok:
-                        # Order was already filled instantly by Binance — process as direct fill
-                        self.logger.grid(f"⚡ SELL @ {fmt_price(level.price)} already filled by Binance — processing as direct fill")
-                        if level.order_id:
-                            self._processed_fills.discard(str(level.order_id))
-                        self._handle_fill(level, execution_price=current_price)
+                        self.logger.warn(
+                            f"Could not confirm cancellation of SELL order #{level.order_id}; "
+                            "leaving it tracked and waiting for exchange fill confirmation."
+                        )
                         continue
 
                     # Clean up order tracking since we cancelled the limit order
@@ -877,21 +924,23 @@ class GridEngine:
 
                 # 3. Trigger sell execution when price pulls back below trailing_stop
                 elif current_price <= level.trailing_stop:
-                    extra_profit = max(0.0, (current_price - level.price) * self.quantity)
+                    quantity = level.quantity or self.quantity
+                    extra_profit = (current_price - level.price) * quantity
                     self.logger.grid(
                         f"🎯 TRAILING TP TRIGGERED! Captured Peak: {fmt_price(level.peak_price)} | "
                         f"Exited @ {fmt_price(current_price)} | Trailing Profit Locked: ${extra_profit:+.4f}!"
                     )
                     # Execute market sell order on exchange to lock in peak exit
-                    m_order = self.client.place_market_order(side="sell", quantity=self.quantity)
-                    if m_order and "id" in m_order:
-                        level.order_id = str(m_order["id"])
+                    m_order = self.client.place_market_order(side="sell", quantity=quantity)
+                    if not m_order or "id" not in m_order:
+                        self.logger.error("Trailing SELL market order failed; keeping the level active for retry.")
+                        continue
+                    level.order_id = str(m_order["id"])
 
                     # Set level status to PENDING so _handle_fill can transition it to FILLED and place replacement BUY
                     level.status = GridOrderStatus.PENDING
-                    if level.order_id:
-                        self._processed_fills.discard(str(level.order_id))
-                    self._handle_fill(level, execution_price=current_price)
+                    self._processed_fills.discard(str(level.order_id))
+                    self._handle_fill(level, fill_info=m_order, execution_price=current_price)
 
     def _process_trailing_buy(self, current_price: float):
         """
@@ -910,17 +959,15 @@ class GridEngine:
                     cancel_ok = False
                     if level.order_id:
                         try:
-                            self.client.cancel_order(level.order_id)
-                            cancel_ok = True
-                        except Exception:
-                            cancel_ok = False
+                            cancel_ok = self.client.cancel_order(level.order_id)
+                        except Exception as e:
+                            self.logger.error(f"Failed to cancel BUY order #{level.order_id}: {e}")
 
                     if not cancel_ok:
-                        # Order was already filled instantly by Binance — process as direct fill
-                        self.logger.grid(f"⚡ BUY @ {fmt_price(level.price)} already filled by Binance — processing as direct fill")
-                        if level.order_id:
-                            self._processed_fills.discard(str(level.order_id))
-                        self._handle_fill(level, execution_price=current_price)
+                        self.logger.warn(
+                            f"Could not confirm cancellation of BUY order #{level.order_id}; "
+                            "leaving it tracked and waiting for exchange fill confirmation."
+                        )
                         continue
 
                     # Clean up order tracking since we cancelled the limit order
@@ -954,21 +1001,23 @@ class GridEngine:
 
                 # 3. Trigger buy execution when price bounces up above trailing_bounce
                 elif current_price >= level.trailing_bounce:
-                    savings = max(0.0, (level.price - current_price) * self.quantity)
+                    quantity = level.quantity or self.quantity
+                    savings = (level.price - current_price) * quantity
                     self.logger.grid(
                         f"🎯 TRAILING BUY TRIGGERED! Captured Trough: {fmt_price(level.trough_price)} | "
                         f"Bought @ {fmt_price(current_price)} | Entry Savings: ${savings:+.4f}!"
                     )
                     # Execute market buy order on exchange to enter dip
-                    m_order = self.client.place_market_order(side="buy", quantity=self.quantity)
-                    if m_order and "id" in m_order:
-                        level.order_id = str(m_order["id"])
+                    m_order = self.client.place_market_order(side="buy", quantity=quantity)
+                    if not m_order or "id" not in m_order:
+                        self.logger.error("Trailing BUY market order failed; keeping the level active for retry.")
+                        continue
+                    level.order_id = str(m_order["id"])
 
                     # Set level status to PENDING so _handle_fill can transition it to FILLED and place replacement SELL
                     level.status = GridOrderStatus.PENDING
-                    if level.order_id:
-                        self._processed_fills.discard(str(level.order_id))
-                    self._handle_fill(level, execution_price=current_price)
+                    self._processed_fills.discard(str(level.order_id))
+                    self._handle_fill(level, fill_info=m_order, execution_price=current_price)
 
     def update_price(self, price: float):
         """Update the current market price (from WebSocket or polling)."""
