@@ -6,6 +6,7 @@ Handles connection, authentication, and all API operations.
 import time
 import ccxt
 from logger import BotLogger, fmt_price
+from trading_rules import effective_leverage
 
 
 class BinanceClient:
@@ -16,6 +17,9 @@ class BinanceClient:
         self.logger = logger
         self.exchange = None
         self.symbol = config["symbol"]
+        self.config["leverage"] = effective_leverage(
+            self.symbol, self.config.get("leverage", 5)
+        )
 
     def connect(self):
         """Initialize ccxt exchange instance and configure for futures.
@@ -80,13 +84,7 @@ class BinanceClient:
             self.logger.error(f"Connection failed: {e}")
             raise
 
-        # Set leverage
-        try:
-            leverage = self.config.get("leverage", 5)
-            self.exchange.set_leverage(leverage, self.symbol)
-            self.logger.system(f"Leverage set to {leverage}x for {self.symbol}")
-        except Exception as e:
-            self.logger.warn(f"Could not set leverage (may already be set): {e}")
+        self.set_symbol_leverage(self.symbol)
 
         # Set margin mode to CROSSED (safer for grid trading)
         try:
@@ -94,6 +92,28 @@ class BinanceClient:
             self.logger.system("Margin mode: CROSS")
         except Exception as e:
             self.logger.warn(f"Could not set margin mode (may already be set): {e}")
+
+    def set_symbol_leverage(self, symbol: str, leverage: int | None = None):
+        """Apply exchange leverage or fail closed before trading."""
+        requested_leverage = effective_leverage(
+            symbol,
+            leverage if leverage is not None else self.config.get("leverage", 5),
+        )
+        try:
+            self.exchange.set_leverage(requested_leverage, symbol)
+        except Exception as e:
+            self.logger.error(
+                f"Failed to set {requested_leverage}x leverage for {symbol}; "
+                f"refusing to trade with unverified leverage: {e}"
+            )
+            raise RuntimeError(
+                f"Could not set leverage for {symbol}; bot startup/switch aborted."
+            ) from e
+
+        self.config["leverage"] = requested_leverage
+        self.logger.system(
+            f"Leverage set to {requested_leverage}x for {symbol}"
+        )
 
     def get_price(self) -> float:
         """Fetch current mark price for the configured symbol."""
@@ -128,10 +148,7 @@ class BinanceClient:
             free = usdt.get("free")
             if free is not None:
                 return max(0.0, float(free))
-            total = usdt.get("total")
-            if total is not None:
-                return max(0.0, float(total))
-            raise RuntimeError("Binance did not return free or total USDT balance.")
+            raise RuntimeError("Binance did not return free USDT margin.")
         except Exception as e:
             raise RuntimeError(f"Failed to fetch current USDT margin balance: {e}") from e
 

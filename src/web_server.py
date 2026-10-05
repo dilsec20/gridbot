@@ -25,7 +25,7 @@ from grid_engine import GridEngine
 from quant_engine import QuantEngine
 from binance_ws import BinanceWSClient
 from performance_tracker import PerformanceTracker
-from auto_portfolio_manager import AutoPortfolioManager, get_smart_max_position
+from auto_portfolio_manager import AutoPortfolioManager
 from trend_guard import TrendGuard
 from telegram_notifier import TelegramNotifier
 from tax_report_generator import TaxReportGenerator
@@ -280,42 +280,12 @@ def api_market_scanner():
     except Exception:
         pass
 
-    # Fallback structure
-    fallback_data = {
-        'best_grid': [
-            {
-                'symbol': 'ETH/USDT', 'price': 1875.0, 'score': 95, 'status': 'Excellent', 'status_badge': '🟢 Excellent',
-                'stars': '★★★★★', 'ranging_probability': 88, 'atr_percent': 1.8, 'rsi': 48.5, 'adx': 14.2,
-                'grid_levels': 10, 'spacing_mode': 'percent', 'grid_spacing_percent': 0.5, 'grid_spacing_usdt': 9.37,
-                'quantity': 0.005, 'recommended_leverage': 5, 'max_loss_usdt': 15.0, 'max_position_usdt': 70.0,
-                'est_cycle_roi': 0.55, 'est_cycles_per_hour': 6.0, 'est_daily_return_min': 3.2, 'est_daily_return_max': 6.5
-            },
-            {
-                'symbol': 'HOME/USDT', 'price': 0.00818, 'score': 92, 'status': 'Excellent', 'status_badge': '🟢 Excellent',
-                'stars': '★★★★★', 'ranging_probability': 84, 'atr_percent': 7.2, 'rsi': 54.0, 'adx': 17.1,
-                'grid_levels': 14, 'spacing_mode': 'percent', 'grid_spacing_percent': 2.33, 'grid_spacing_usdt': 0.00019,
-                'quantity': 2650.0, 'recommended_leverage': 3, 'max_loss_usdt': 15.0, 'max_position_usdt': 70.0,
-                'est_cycle_roi': 2.56, 'est_cycles_per_hour': 4.5, 'est_daily_return_min': 4.0, 'est_daily_return_max': 8.2
-            },
-            {
-                'symbol': 'SUI/USDT', 'price': 1.78, 'score': 90, 'status': 'Excellent', 'status_badge': '🟢 Excellent',
-                'stars': '★★★★★', 'ranging_probability': 82, 'atr_percent': 3.5, 'rsi': 51.2, 'adx': 16.5,
-                'grid_levels': 10, 'spacing_mode': 'percent', 'grid_spacing_percent': 1.0, 'grid_spacing_usdt': 0.0178,
-                'quantity': 10.0, 'recommended_leverage': 5, 'max_loss_usdt': 15.0, 'max_position_usdt': 70.0,
-                'est_cycle_roi': 1.1, 'est_cycles_per_hour': 5.0, 'est_daily_return_min': 3.0, 'est_daily_return_max': 6.0
-            },
-            {
-                'symbol': 'SOL/USDT', 'price': 185.2, 'score': 86, 'status': 'Very Good', 'status_badge': '🟢 Very Good',
-                'stars': '★★★★☆', 'ranging_probability': 76, 'atr_percent': 2.1, 'rsi': 52.0, 'adx': 19.0,
-                'grid_levels': 10, 'spacing_mode': 'percent', 'grid_spacing_percent': 0.6, 'grid_spacing_usdt': 1.11,
-                'quantity': 0.13, 'recommended_leverage': 5, 'max_loss_usdt': 15.0, 'max_position_usdt': 70.0,
-                'est_cycle_roi': 0.66, 'est_cycles_per_hour': 5.0, 'est_daily_return_min': 2.5, 'est_daily_return_max': 5.0
-            },
-        ],
+    _cached_scanner_data = {
+        'best_grid': [],
         'gainers': [],
-        'losers': []
+        'losers': [],
+        'error': 'Live market data is unavailable; no cached sizing recommendations are shown.',
     }
-    _cached_scanner_data = fallback_data
     _last_scanner_time = now
     return _cached_scanner_data
 
@@ -335,15 +305,15 @@ def api_ai_recommend():
 
 @app.route('/api/balance')
 def api_balance():
-    """Fetch live USDT account balance."""
+    """Fetch live free USDT margin available for new orders."""
     try:
         client = get_shared_client()
         if client:
-            bal = client.get_wallet_balance()
+            bal = client.get_balance()
             return {'balance': float(bal)}
-        return {'balance': 5000.0}
+        return {'error': 'Binance client is not connected.'}, 503
     except Exception as e:
-        return {'balance': 5000.0, 'error': str(e)}
+        return {'error': str(e)}, 503
 
 
 @app.route('/api/performance')
@@ -484,7 +454,11 @@ def handle_start_bot(config):
     current_config['quantity_per_grid'] = config.get('quantity_per_grid', 0.001)
     current_config['leverage'] = config.get('leverage', 5)
     current_config['max_loss_usdt'] = config.get('max_loss_usdt', 100.0)
-    current_config['max_position_usdt'] = config.get('max_position_usdt', 500.0)
+    current_config['max_position_usdt'] = config.get('max_position_usdt', 0.0)
+    current_config['max_position_balance_percent'] = min(
+        60.0,
+        float(config.get('max_position_balance_percent', 60.0) or 0.0),
+    )
     current_config['trailing_tp_enabled'] = config.get('trailing_tp_enabled', True)
     current_config['trailing_tp_callback_percent'] = config.get('trailing_tp_callback_percent', 0.5)
 
@@ -531,7 +505,7 @@ def handle_stop_and_close():
             time.sleep(0.5)
             client.close_position()
             time.sleep(1)
-            fresh_balance = client.get_wallet_balance()
+            fresh_balance = client.get_balance()
             emit('stats_update', {
                 'realized_pnl': 0,
                 'unrealized_pnl': 0,
@@ -611,23 +585,22 @@ def run_bot(config):
         risk_manager = RiskManager(config, client, logger)
         risk_manager.initialize()
 
-        # Respect user manual max position setting if provided, otherwise fallback to smart calculation
+        # Keep an optional hard cap; the risk manager applies the live balance limit.
         user_max_pos = config.get('max_position_usdt')
         if user_max_pos is not None and float(user_max_pos) > 0:
-            final_max_pos = float(user_max_pos)
             config['user_set_max_position'] = True
         else:
-            leverage = config.get('leverage', 5)
-            qty = config.get('quantity_per_grid', 0.001)
-            price = client.get_price() if hasattr(client, 'get_price') else 0
-            order_notional = qty * price if price > 0 else 0
-            grid_lvls = config.get('grid_levels', 10)
-            final_max_pos = get_smart_max_position(balance, leverage, order_notional, grid_lvls)
             config['user_set_max_position'] = False
 
-        config['max_position_usdt'] = final_max_pos
-        risk_manager.max_position_usdt = final_max_pos
-        logger.system(f"Max position limit: ${final_max_pos:,.2f}")
+        config['max_position_usdt'] = (
+            float(user_max_pos) if config['user_set_max_position'] else 0.0
+        )
+        risk_manager.max_position_usdt = config['max_position_usdt']
+        logger.system(
+            "Max one-side position limit: "
+            f"${risk_manager.get_max_position_limit():,.2f} USDT "
+            "(60% of available free balance or lower configured cap)"
+        )
 
         grid_engine = GridEngine(config, client, risk_manager, logger)
         shared_grid_engine = grid_engine
@@ -812,22 +785,13 @@ def run_bot(config):
                     config['quantity_per_grid'] = switch_config.get('quantity', 0.001)
                     config['leverage'] = switch_config.get('recommended_leverage', 5)
 
-                    # 4. Recalculate smart max position for new leverage (unless user manually set a limit)
-                    fresh_balance = client.get_wallet_balance()
+                    # 4. Preserve any explicit hard cap; dynamic allocation stays balance-based.
                     new_leverage = config['leverage']
                     if not config.get('user_set_max_position'):
-                        new_qty = config.get('quantity_per_grid', 0.001)
-                        new_price = client.get_price() if hasattr(client, 'get_price') else 0
-                        new_notional = new_qty * new_price if new_price > 0 else 0
-                        new_grid_lvls = config.get('grid_levels', 10)
-                        config['max_position_usdt'] = get_smart_max_position(fresh_balance, new_leverage, new_notional, new_grid_lvls)
+                        config['max_position_usdt'] = 0.0
                     # 5. Reinitialize client for new symbol
                     client.symbol = new_symbol
-                    try:
-                        client.exchange.set_leverage(new_leverage, new_symbol)
-                        logger.system(f"Leverage set to {new_leverage}x for {new_symbol}")
-                    except Exception:
-                        pass
+                    client.set_symbol_leverage(new_symbol, new_leverage)
                     try:
                         client.exchange.set_margin_mode('cross', new_symbol)
                     except Exception:

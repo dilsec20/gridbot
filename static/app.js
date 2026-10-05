@@ -29,8 +29,10 @@ async function fetchInitialBalance() {
     try {
         const res = await fetch('/api/balance');
         const data = await res.json();
-        if (data.balance) {
+        if (data.balance !== undefined) {
             document.getElementById('balance').textContent = `$${data.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        } else if (data.error) {
+            addLog('error', `Balance unavailable: ${data.error}`);
         }
     } catch (e) {
         console.log('Failed to fetch initial balance:', e);
@@ -220,7 +222,7 @@ async function applyAiGrid() {
         if (maxLossEl && data.max_loss_usdt) maxLossEl.value = data.max_loss_usdt;
 
         const maxPosEl = document.getElementById('maxPositionUsdt') || document.getElementById('maxPosition');
-        if (maxPosEl && data.max_position_usdt) maxPosEl.value = data.max_position_usdt;
+        if (maxPosEl) maxPosEl.value = '0';
 
         if (data.price) {
             lastKnownPrice = data.price;
@@ -260,7 +262,7 @@ async function applyAiGrid() {
             }
         }
 
-        addLog('system', `🧠 AI Quant Engine analyzed ${symbol}: RSI: ${data.rsi}, ATR: ${data.atr_percent}%, Book: ${data.book_imbalance || 'Balanced'}, Rec. Leverage: ${data.recommended_leverage}x, Spacing: ${data.grid_spacing_percent}%, Qty: ${data.quantity}`);
+        addLog('system', `🧠 AI Quant Engine analyzed ${symbol}: RSI: ${data.rsi}, ATR: ${data.atr_percent}%, Book: ${data.book_imbalance || 'Balanced'}, Rec. Leverage: ${data.recommended_leverage}x, Spacing: ${data.grid_spacing_percent}%, Qty: ${data.quantity}, Max one-side notional: $${data.max_position_usdt} (${data.position_allocation_percent}% of free balance)`);
     } catch (e) {
         addLog('error', `Failed to get AI Grid parameters: ${e}`);
     }
@@ -403,7 +405,7 @@ function selectCoinFromRadar(symbol, encodedCoinData) {
         if (maxLossEl && coinData.max_loss_usdt) maxLossEl.value = coinData.max_loss_usdt;
 
         const maxPosEl = document.getElementById('maxPositionUsdt') || document.getElementById('maxPosition');
-        if (maxPosEl && coinData.max_position_usdt) maxPosEl.value = coinData.max_position_usdt;
+        if (maxPosEl) maxPosEl.value = '0';
 
         if (coinData.price) {
             lastKnownPrice = coinData.price;
@@ -426,7 +428,7 @@ function selectCoinFromRadar(symbol, encodedCoinData) {
             }
         }
 
-        addLog('system', `⚡ AI Grid Opportunity Applied: ${symbol} (Score: ${coinData.score}/100, ${coinData.stars}) — Auto-Filled Grid: ${coinData.grid_levels}, Spacing: ${coinData.grid_spacing_percent}%, Qty: ${coinData.quantity}`);
+        addLog('system', `⚡ AI Grid Opportunity Applied: ${symbol} (Score: ${coinData.score}/100, ${coinData.stars}) — Grid: ${coinData.grid_levels}, Spacing: ${coinData.grid_spacing_percent}%, Qty: ${coinData.quantity}, Max one-side notional: $${coinData.max_position_usdt} (${coinData.position_allocation_percent}% of free balance)`);
     } else {
         addLog('system', `Selected ${symbol} from Market Radar`);
         applyAiGrid();
@@ -947,12 +949,13 @@ function updateMarginCalculator() {
     const qtyPerGrid = parseFloat(document.getElementById('gridQuantity').value) || 0.001;
     const leverage = parseInt(document.getElementById('leverage').value) || 5;
 
-    // Total Notional = levels * qtyPerGrid * price
-    const totalNotional = levels * qtyPerGrid * price;
+    // Grid risk is capped for the larger of the two one-sided exposures.
+    const ordersPerSide = Math.max(1, Math.ceil(levels / 2));
+    const totalNotional = ordersPerSide * qtyPerGrid * price;
     // Required Margin = totalNotional / leverage
     const requiredMargin = totalNotional / leverage;
-    // Margin Per Grid Order = requiredMargin / levels
-    const marginPerOrder = levels > 0 ? requiredMargin / levels : 0.0;
+    // Margin Per Grid Order = one order's notional divided by leverage.
+    const marginPerOrder = ordersPerSide > 0 ? requiredMargin / ordersPerSide : 0.0;
     // Calculate Est. Profit per Cycle ($ & %) — NET of estimated Binance fees
     const spacingMode = document.getElementById('spacingMode')?.value || 'percent';
     let spacingUsdt = 0;

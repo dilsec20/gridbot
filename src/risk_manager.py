@@ -5,6 +5,7 @@ Enforces safety limits: max loss, position size, balance checks.
 
 from logger import BotLogger
 from binance_client import BinanceClient
+from trading_rules import effective_leverage, position_budget
 
 
 class RiskManager:
@@ -16,7 +17,7 @@ class RiskManager:
         self.logger = logger
 
         self.max_loss_usdt = config.get("max_loss_usdt", 100.0)
-        self.max_position_usdt = config.get("max_position_usdt", 500.0)
+        self.max_position_usdt = float(config.get("max_position_usdt", 0) or 0)
         self.realized_pnl = 0.0
         self.initial_balance = 0.0
         self.peak_pnl = 0.0  # High-water mark for trailing profit protection
@@ -27,7 +28,16 @@ class RiskManager:
         self.peak_pnl = 0.0
         self.logger.risk(f"Initial balance: ${self.initial_balance:,.2f} USDT")
         self.logger.risk(f"Max loss limit: ${self.max_loss_usdt:,.2f}")
-        self.logger.risk(f"Max position limit: ${self.max_position_usdt:,.2f}")
+        self.logger.risk(
+            "Grid notional is capped at "
+            f"{min(60.0, float(self.config.get('max_position_balance_percent', 60.0))):.1f}% "
+            "of available free balance, with any lower configured USDT cap also applied."
+        )
+
+    def get_max_position_limit(self) -> float:
+        """Resolve the notional cap from free margin and any fixed dollar ceiling."""
+        available_balance = float(self.client.get_balance())
+        return position_budget(available_balance, self.config)
 
     def add_realized_pnl(self, pnl: float):
         """Track realized PnL from completed grid cycles."""
@@ -115,10 +125,12 @@ class RiskManager:
             abs(signed_position - pending_sells),
         )
 
-        if notional > self.max_position_usdt:
+        max_position_limit = self.get_max_position_limit()
+        if notional > max_position_limit:
             self.logger.risk(
                 f"Projected position limit reached: ${notional:,.2f} > "
-                f"${self.max_position_usdt:,.2f} (includes pending orders)"
+                f"${max_position_limit:,.2f} (includes pending orders; "
+                f"{min(60.0, float(self.config.get('max_position_balance_percent', 60.0))):.1f}% wallet cap)"
             )
             return False
 
@@ -165,7 +177,10 @@ class RiskManager:
             # Check available balance
             try:
                 balance = self.client.get_balance()
-                leverage = float(self.config.get("leverage", 5) or 5)
+                leverage = effective_leverage(
+                    self.config.get("symbol", ""),
+                    self.config.get("leverage", 5),
+                )
                 if leverage <= 0:
                     self.logger.error(f"Invalid leverage configured for risk check: {leverage}")
                     return False
@@ -216,28 +231,26 @@ class RiskManager:
             growth_ratio = (self.initial_balance + realized_gain) / self.initial_balance
             target_qty = base_qty * growth_ratio
 
-            # 2. Cap by configured max_position_usdt limit
+            # 2. Cap each grid-side's aggregate notional to the allocation budget.
             if current_price > 0:
-                max_order_notional = self.max_position_usdt * 0.40
+                max_position_limit = self.get_max_position_limit()
+                orders_per_side = max(1, (grid_levels_count + 1) // 2)
+                max_order_notional = max_position_limit / orders_per_side
                 max_qty_by_position = max_order_notional / current_price
                 target_qty = min(target_qty, max_qty_by_position)
 
-            # 3. Cap by live liquid wallet margin capacity on Binance
+            # 3. Do not compound when wallet balance cannot be verified.
             try:
-                wallet_balance = float(self.client.get_balance() or self.client.get_wallet_balance() or 0.0)
-                if wallet_balance > 0 and current_price > 0:
-                    leverage = float(self.config.get("leverage", 5) or 5)
-                    max_total_margin = wallet_balance * 0.45
-                    max_margin_per_order = max_total_margin / max(1, grid_levels_count)
-                    max_notional_per_order = max_margin_per_order * leverage
-                    max_qty_by_margin = max_notional_per_order / current_price
-                    target_qty = min(target_qty, max_qty_by_margin)
+                wallet_balance = float(self.client.get_wallet_balance())
+                if wallet_balance <= 0:
+                    return 0.0
             except Exception as e:
-                self.logger.error(f"Failed to fetch balance for compounding cap: {e}")
+                self.logger.error(f"Failed to fetch wallet balance for compounding cap: {e}")
+                return 0.0
 
             final_qty = max(0.0, round(target_qty, 6))
             return final_qty
 
         except Exception as e:
             self.logger.error(f"Error in get_compounded_quantity: {e}")
-            return base_qty
+            return 0.0

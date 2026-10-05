@@ -153,9 +153,10 @@ This bot includes institutional-grade safety mechanisms to protect your capital:
    - Reconciles local orders against Binance. A missing order is treated as a fill only after Binance reports it closed; canceled or unverified orders are not credited as trades.
 
 6. **Exposure and Fill Accounting**:
-   - The position cap includes currently open orders and the proposed order, and available free margin is checked before opening exposure.
+   - The position cap includes the open futures position, pending orders, and the proposed order. Grid notional is limited to 60% of wallet balance (and any lower configured USDT cap), leaving at least 40% unallocated; free margin is separately checked before each opening order.
+   - Fixed 10x leverage applies only when both contract assets are recognized stablecoins. Other markets retain volatility-based sizing, capped at 5x.
    - Cycle PnL uses recorded entry and exit fill prices, order quantity, and the configured fee estimate. Market-order slippage and actual exchange fee tiers can still make realized results differ.
-   - AI sizing respects the configured leverage, max-position, and max-loss values, uses a liquid-margin buffer, and floors suggested spacing above the configured fee estimate. Recommendations are estimates, not profit guarantees.
+   - AI sizing allocates one side of the grid within the 60%-of-wallet notional budget. Leverage affects required margin, not the position cap. If live market data or balance is unavailable, AI sizing fails closed instead of showing a stale fallback recommendation. Recommendations are estimates, not profit guarantees.
 
 ---
 
@@ -207,9 +208,10 @@ Edit `config.json`:
   "grid_levels": 8,
   "grid_spacing_usdt": 3.0,
   "quantity_per_grid": 0.5,
-  "leverage": 10,
+  "leverage": 5,
   "max_loss_usdt": 50.0,
-  "max_position_usdt": 1600.0
+  "max_position_balance_percent": 60.0,
+  "max_position_usdt": 0
 }
 ```
 

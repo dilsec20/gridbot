@@ -18,6 +18,7 @@ from typing import Optional
 from logger import BotLogger, fmt_price
 from binance_client import BinanceClient
 from risk_manager import RiskManager
+from trading_rules import position_budget
 
 
 class GridSide(Enum):
@@ -248,26 +249,10 @@ class GridEngine:
         elif self.current_price < 1:
             self.tick_size = max(self.tick_size, 5)
 
-        # Enforce minimum quantity, lot size precision, and Binance $5.00 minimum notional
+        # Read exchange quantity constraints; enforce them after applying the exposure cap.
         min_qty = symbol_info.get("min_qty", 0.001)
         lot_size = symbol_info.get("lot_size", 3)
         min_notional = float(symbol_info.get("min_notional", 5.0) or 5.0)
-
-        if self.current_price > 0:
-            min_notional_qty = min_notional / self.current_price
-            if self.quantity < min_notional_qty:
-                self.quantity = min_notional_qty
-                self.logger.grid(f"Quantity auto-scaled to meet Binance ${min_notional:.2f} min notional: {self.quantity:.6f} {self.symbol}")
-
-        if self.quantity < min_qty:
-            self.quantity = min_qty
-            self.logger.grid(f"Quantity adjusted to exchange minimum for {self.symbol}: {self.quantity}")
-
-        if isinstance(lot_size, int):
-            if lot_size == 0:
-                self.quantity = float(int(round(self.quantity)))
-            else:
-                self.quantity = float(round(self.quantity, lot_size))
 
         # Calculate spacing (percentage or flat USDT)
         if self.spacing_mode == "percent":
@@ -299,6 +284,40 @@ class GridEngine:
                 f"(~${fee_breakeven_spacing} round-trip fee per cycle). "
                 f"Auto-adjusted to {new_pct:.3f}% (${self.grid_spacing}) for a buffer over estimated fees."
             )
+
+        if self.current_price <= 0:
+            raise RuntimeError(f"Cannot size a grid for invalid price {self.current_price}.")
+
+        # Clamp stale/configured quantity so one complete grid side fits the live cap.
+        available_balance = float(self.client.get_balance())
+        max_position_notional = position_budget(available_balance, self.config)
+        orders_per_side = max(1, self.grid_levels_count // 2)
+        worst_grid_price = self.current_price + orders_per_side * self.grid_spacing
+        max_quantity = max_position_notional / (orders_per_side * worst_grid_price)
+
+        if isinstance(lot_size, int):
+            quantity_scale = 10 ** max(0, lot_size)
+            max_quantity = math.floor(max_quantity * quantity_scale) / quantity_scale
+            self.quantity = math.floor(self.quantity * quantity_scale) / quantity_scale
+
+        if self.quantity > max_quantity:
+            self.logger.warn(
+                f"Grid quantity {self.quantity:g} exceeds the 60% free-balance "
+                f"one-side budget; reduced to {max_quantity:g}."
+            )
+            self.quantity = max_quantity
+
+        if self.quantity < min_qty or self.quantity * self.current_price < min_notional:
+            raise RuntimeError(
+                "Available 60% position budget cannot support the exchange's "
+                f"minimum order size for {self.symbol}; refusing to start grid."
+            )
+
+        self.config["quantity_per_grid"] = self.quantity
+        self.logger.grid(
+            f"Grid sizing: {self.quantity:g} per level; max one-side notional "
+            f"${max_position_notional:,.2f} from ${available_balance:,.2f} free balance."
+        )
 
         self.logger.grid(f"Current {self.symbol} price: {self.current_price}")
         self.logger.grid(f"Symbol precision: tick={self.tick_size}, lot={lot_size}")
@@ -750,7 +769,7 @@ class GridEngine:
 
         # 1. Calculate Inventory Bias & Update State Machine
         inventory_notional = 0.0
-        max_inventory_bias = 500.0
+        max_inventory_bias = 0.0
         try:
             pos = self.client.get_position()
             pos_amount = float(pos.get("size", 0) or 0)
@@ -758,7 +777,10 @@ class GridEngine:
             if pos_side == "short":
                 pos_amount = -abs(pos_amount)
             inventory_notional = pos_amount * self.current_price
-            max_inventory_bias = self.config.get("max_position_usdt", 500.0) * self.inventory_bias_limit_ratio
+            max_inventory_bias = (
+                self.risk_manager.get_max_position_limit()
+                * self.inventory_bias_limit_ratio
+            )
         except Exception as e:
             self.logger.error(f"Error checking inventory bias: {e}")
 

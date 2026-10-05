@@ -8,7 +8,7 @@ automatically switches to the optimal coin with zero-risk transitions.
 Safety Rules:
   1. Only switches when current position size == 0 (no open trades)
   2. Minimum 1-hour hold time before considering a switch
-  3. Smart Max Position auto-calculated from wallet balance × leverage × 0.35
+  3. Maximum notional is auto-calculated from 60% of available wallet balance
   4. Never trades coins scoring below 65 (Good threshold)
 """
 
@@ -18,6 +18,7 @@ from typing import Optional, Callable
 
 from quant_engine import QuantEngine
 from logger import BotLogger
+from trading_rules import DEFAULT_POSITION_ALLOCATION_PERCENT, position_budget
 
 
 # Coins the Auto Manager evaluates
@@ -39,28 +40,19 @@ RESCORE_INTERVAL_SECONDS = 1800
 MIN_TRADEABLE_SCORE = 65
 
 
-def get_smart_max_position(balance: float, leverage: int = 5,
-                           order_notional: float = 0.0, grid_levels: int = 10) -> float:
+def get_smart_max_position(balance: float) -> float:
     """
-    Calculate safe max position value based on account equity and actual grid order sizes.
-    
-    Logic:
-    - If order_notional is known: allow half the buy-side grid to fill (balanced exposure)
-    - Cap at 50% of total leveraged equity to maintain liquidation safety buffer
-    - Floor at $50 minimum for micro accounts
+    Return the unleveraged notional budget while reserving at least 40% of equity.
     """
-    half_buy_levels = max(1, grid_levels // 2)
-    max_equity_cap = balance * leverage * 0.50  # Never exceed 50% of total buying power
-    
-    if order_notional > 0:
-        # Allow half the buy levels to fill before blocking (balanced grid exposure)
-        grid_based_max = order_notional * min(half_buy_levels, 4)  # Cap at 4 levels max
-        safe_max = min(grid_based_max, max_equity_cap)
-    else:
-        # Fallback: 20% of total equity when order size is unknown
-        safe_max = balance * leverage * 0.20
-    
-    return round(max(50.0, safe_max), 2)
+    return round(
+        position_budget(
+            balance,
+            {
+                "max_position_balance_percent": DEFAULT_POSITION_ALLOCATION_PERCENT,
+            },
+        ),
+        2,
+    )
 
 
 class AutoPortfolioManager:
@@ -72,7 +64,7 @@ class AutoPortfolioManager:
     2. Compares the best coin with the currently trading coin
     3. If a better coin is found (score gap >= 10) AND no open position:
        → Triggers a safe switch to the better coin
-    4. Auto-calculates max_position based on wallet balance + leverage
+    4. Auto-calculates max_position from available wallet balance
     """
 
     def __init__(self, client, logger: BotLogger, socketio=None):

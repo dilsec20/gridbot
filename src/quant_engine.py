@@ -9,6 +9,8 @@ import math
 import time
 from typing import Dict, Any, List
 
+from trading_rules import effective_leverage, is_stablecoin_pair, position_budget
+
 
 def calculate_rsi(closes: List[float], period: int = 14) -> float:
     """Calculate Relative Strength Index (RSI)."""
@@ -319,7 +321,7 @@ class QuantEngine:
             else:
                 grid_levels = 8
 
-            # 6. Safe Leverage
+            # 6. Set the stablecoin-pair rule; otherwise retain volatility sizing.
             if atr_percent > 4.0:
                 recommended_leverage = 3
             elif atr_percent < 1.5:
@@ -327,30 +329,45 @@ class QuantEngine:
             else:
                 recommended_leverage = 5
             configured_leverage = int(self.config.get("leverage", 5) or 5)
-            recommended_leverage = min(recommended_leverage, max(1, configured_leverage))
+            if is_stablecoin_pair(symbol):
+                recommended_leverage = 10
+            else:
+                recommended_leverage = min(recommended_leverage, max(1, configured_leverage))
+            recommended_leverage = effective_leverage(symbol, recommended_leverage)
 
-            # 7. Size orders from available margin and configured exposure limits.
+            # 7. Spread the unleveraged notional budget across one full grid side.
             balance = float(self.client.get_balance())
             if balance <= 0:
                 raise ValueError("No free USDT margin is available for an AI recommendation.")
 
-            # Keep most funds liquid; the account may have unrelated open positions/orders.
-            target_total_margin = balance * 0.25
-            target_margin_per_level = target_total_margin / grid_levels if grid_levels > 0 else 10.0
-            target_notional_per_level = target_margin_per_level * recommended_leverage
+            max_position_usdt = position_budget(balance, self.config)
+            orders_per_side = max(1, (grid_levels + 1) // 2)
+            worst_grid_price = (
+                current_price + orders_per_side * recommended_spacing_usdt
+            )
+            target_quantity = (
+                max_position_usdt / (orders_per_side * worst_grid_price)
+                if worst_grid_price > 0
+                else 0.0
+            )
 
             symbol_info = self.client.get_symbol_info_for(symbol)
-            min_qty = symbol_info.get("min_qty", 0.001)
+            min_qty = float(symbol_info.get("min_qty", 0.001) or 0.001)
             lot_size = symbol_info.get("lot_size", 2)
             tick_size = symbol_info.get("tick_size", 4)
 
-            quantity = target_notional_per_level / current_price if current_price > 0 else min_qty
-            if quantity < min_qty:
-                quantity = min_qty
+            quantity = target_quantity
 
             if isinstance(lot_size, int):
                 scale = 10 ** max(0, lot_size)
                 quantity = math.floor(quantity * scale) / scale
+
+            min_notional = float(symbol_info.get("min_notional", 5.0) or 5.0)
+            if quantity < min_qty or quantity * current_price < min_notional:
+                raise ValueError(
+                    "The 60% position budget is too small to meet this symbol's "
+                    "minimum order size while preserving the 40% liquidity reserve."
+                )
 
             # Respect the user's hard limits instead of raising them to a wallet percentage.
             configured_max_loss = float(self.config.get("max_loss_usdt", 0) or 0)
@@ -358,26 +375,7 @@ class QuantEngine:
                 configured_max_loss if configured_max_loss > 0 else max(10.0, balance * 0.02),
                 2,
             )
-            order_notional = quantity * current_price if current_price > 0 else 0
-            half_buy_levels = max(1, grid_levels // 2)
-            max_equity_cap = balance * recommended_leverage * 0.20
-            grid_based_max = order_notional * min(half_buy_levels, 4)
-            configured_max_position = float(
-                self.config.get("max_position_usdt", 0) or 0
-            )
-            max_position_usdt = round(
-                min(configured_max_position, max_equity_cap)
-                if configured_max_position > 0
-                else min(grid_based_max, max_equity_cap),
-                2,
-            )
-            max_order_notional = max_position_usdt / half_buy_levels
-            max_quantity_by_position = (
-                max_order_notional / current_price if current_price > 0 else min_qty
-            )
-            quantity = min(quantity, max_quantity_by_position)
-            if quantity < min_qty:
-                quantity = min_qty
+            max_position_usdt = round(max_position_usdt, 2)
 
             # 8. Institutional Confidence & Daily ROI Predictions
             ranging_probability = int(round(max(50.0, 100.0 - (adx * 1.0) - abs(rsi - 50.0))))
@@ -419,6 +417,10 @@ class QuantEngine:
                 "grid_spacing_usdt": recommended_spacing_usdt,
                 "quantity": quantity,
                 "recommended_leverage": recommended_leverage,
+                "position_allocation_percent": min(
+                    60.0,
+                    float(self.config.get("max_position_balance_percent", 60.0) or 0.0),
+                ),
                 "max_loss_usdt": max_loss_usdt,
                 "max_position_usdt": max_position_usdt,
                 "est_cycle_roi": est_cycle_roi,
@@ -433,52 +435,15 @@ class QuantEngine:
             return self._fallback_recommendation(symbol, str(e))
 
     def _fallback_recommendation(self, symbol: str, err: str = "") -> Dict[str, Any]:
-        """Fallback recommendation when OHLCV is unavailable."""
-        config = self.config
-        price = 1.0
-        try:
-            price = self.client.get_price_for(symbol)
-        except Exception:
-            pass
-        grid_levels = 10
-        max_position_usdt = float(config.get("max_position_usdt", 50.0) or 50.0)
-        max_loss_usdt = float(config.get("max_loss_usdt", 10.0) or 10.0)
-        configured_leverage = int(config.get("leverage", 5) or 5)
-        quantity = min(
-            25.0 / price if price > 0 else 1.0,
-            max_position_usdt / (max(1, grid_levels // 2) * price) if price > 0 else 1.0,
-        )
-
+        """Fail closed rather than return stale sizing when market data is unavailable."""
         return {
             "symbol": symbol,
-            "price": price,
-            "score": 75,
-            "status": "Very Good",
-            "status_badge": "🟢 Very Good",
-            "stars": "★★★★☆",
-            "ranging_probability": 84,
-            "rsi": 50.0,
-            "atr": round(price * 0.02, 4),
-            "atr_percent": 2.0,
-            "adx": 16.0,
-            "regime": "Optimal Ranging Grid",
-            "trend_bias": "Neutral Oscillation",
-            "bollinger": {"middle": price, "upper": price * 1.03, "lower": price * 0.97},
-            "grid_levels": grid_levels,
-            "spacing_mode": "percent",
-            "grid_spacing_percent": 0.5,
-            "grid_spacing_usdt": round(price * 0.005, 4),
-            "quantity": max(round(quantity, 6), 0.001),
-            "recommended_leverage": max(1, min(5, configured_leverage)),
-            "max_loss_usdt": max_loss_usdt,
-            "max_position_usdt": max_position_usdt,
-            "est_cycle_roi": 0.6,
-            "est_cycles_per_hour": 4.0,
-            "est_daily_return_min": 2.5,
-            "est_daily_return_max": 5.0,
-            "suggested_tp": round(price * 1.03, 2),
-            "suggested_sl": round(price * 0.95, 2),
-            "error": err,
+            "quantity": 0.0,
+            "max_position_usdt": 0.0,
+            "recommended_leverage": effective_leverage(
+                symbol, self.config.get("leverage", 5)
+            ),
+            "error": err or "Live market data is unavailable; no sizing recommendation was generated.",
         }
 
     def analyze_all(self, symbols: list = None) -> list:
