@@ -10,6 +10,15 @@ STABLECOIN_ASSETS = frozenset(
 )
 
 
+def trading_mode(config: dict) -> str:
+    """Resolve exchange mode, preferring current demo trading over legacy testnet."""
+    if config.get("use_demo", False):
+        return "DEMO"
+    if config.get("use_testnet", True):
+        return "TESTNET"
+    return "LIVE"
+
+
 def is_stablecoin_pair(symbol: str) -> bool:
     """Return True only when both contract assets are recognized stablecoins."""
     pair = str(symbol).split(":", 1)[0].replace("-", "/")

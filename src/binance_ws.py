@@ -9,6 +9,7 @@ import asyncio
 import threading
 import websockets
 from typing import Callable, Optional
+from trading_rules import trading_mode
 
 
 class BinanceWSClient:
@@ -27,8 +28,10 @@ class BinanceWSClient:
         self.symbol = config.get("symbol", "BTC/USDT")
         self.formatted_symbol = self.symbol.replace("/", "").lower()
 
-        use_demo = config.get("use_testnet", True) or config.get("use_demo", True)
-        if use_demo:
+        mode = trading_mode(config)
+        if mode == "DEMO":
+            self.ws_base_url = "wss://demo-fstream.binance.com/ws"
+        elif mode == "TESTNET":
             self.ws_base_url = "wss://stream.binancefuture.com/ws"
         else:
             self.ws_base_url = "wss://fstream.binance.com/ws"

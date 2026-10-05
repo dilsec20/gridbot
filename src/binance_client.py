@@ -6,11 +6,11 @@ Handles connection, authentication, and all API operations.
 import time
 import ccxt
 from logger import BotLogger, fmt_price
-from trading_rules import effective_leverage
+from trading_rules import effective_leverage, trading_mode
 
 
 class BinanceClient:
-    """Wrapper around ccxt.binance for Futures trading on testnet."""
+    """Wrapper around ccxt.binance for Binance USD-M Futures."""
 
     def __init__(self, config: dict, logger: BotLogger):
         self.config = config
@@ -24,11 +24,9 @@ class BinanceClient:
     def connect(self):
         """Initialize ccxt exchange instance and configure for futures.
         
-        Supports three modes:
-        1. Demo Trading (recommended) - uses demo-fapi.binance.com
-        2. Legacy Testnet (deprecated) - uses testnet.binancefuture.com  
-        3. Live Trading - uses real Binance API
+        Supports Binance demo trading, legacy futures testnet, and live trading.
         """
+        mode = trading_mode(self.config)
         options = {
             "apiKey": self.config["api_key"],
             "secret": self.config["api_secret"],
@@ -41,11 +39,8 @@ class BinanceClient:
             },
         }
 
-        use_demo = self.config.get("use_testnet", True) or self.config.get("use_demo", True)
-
-        if use_demo:
-            # Use Binance Futures Testnet
-            # Keys from https://testnet.binancefuture.com
+        if mode == "TESTNET":
+            # Keep legacy testnet URLs for configurations that explicitly select it.
             TESTNET_BASE = "https://testnet.binancefuture.com"
             options["urls"] = {
                 "api": {
@@ -64,9 +59,19 @@ class BinanceClient:
                     "sapiV4": f"{TESTNET_BASE}/sapi/v4",
                 },
             }
-            self.logger.system("Mode: DEMO TRADING (paper money)")
 
         self.exchange = ccxt.binance(options)
+        if mode == "DEMO":
+            enable_demo_trading = getattr(self.exchange, "enable_demo_trading", None)
+            if not callable(enable_demo_trading):
+                raise RuntimeError(
+                    "Installed ccxt does not support Binance Futures demo trading; "
+                    "upgrade ccxt before starting the bot."
+                )
+            enable_demo_trading(True)
+            self.logger.system("Mode: BINANCE DEMO TRADING (paper money)")
+        elif mode == "TESTNET":
+            self.logger.system("Mode: BINANCE FUTURES TESTNET (paper money)")
 
         # Sync local time with Binance server time
         try:
@@ -77,7 +82,11 @@ class BinanceClient:
         # Test connection
         try:
             server_time = self.exchange.fetch_time()
-            mode_str = "Demo Trading" if use_demo else "LIVE"
+            mode_str = {
+                "DEMO": "Demo Trading",
+                "TESTNET": "Futures Testnet",
+                "LIVE": "LIVE",
+            }[mode]
             self.logger.system(f"Connected to Binance {mode_str}")
             self.logger.system(f"Server time: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(server_time / 1000))}")
         except Exception as e:

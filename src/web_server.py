@@ -29,6 +29,7 @@ from auto_portfolio_manager import AutoPortfolioManager
 from trend_guard import TrendGuard
 from telegram_notifier import TelegramNotifier
 from tax_report_generator import TaxReportGenerator
+from trading_rules import trading_mode
 
 
 # ═══════════ Flask App Setup ═══════════
@@ -390,8 +391,12 @@ def handle_connect():
         emit('auto_mode_update', {'active': False})
 
     # Always sync current saved configuration & mode badge to UI on connect
-    is_testnet = bool(current_config.get('use_testnet', False) or current_config.get('use_demo', False))
-    emit('bot_config_sync', {'config': current_config, 'use_testnet': is_testnet})
+    mode = trading_mode(current_config)
+    emit('bot_config_sync', {
+        'config': current_config,
+        'use_testnet': mode != 'LIVE',
+        'trading_mode': mode,
+    })
 
     # Sync bot running state & grid levels
     global shared_grid_engine, shared_risk_manager, _cached_client, bot_thread, bot_running
@@ -400,10 +405,11 @@ def handle_connect():
 
     if bot_running:
         symbol = current_config.get('symbol', 'SOL/USDT')
-        is_testnet = bool(current_config.get('use_testnet', False) or current_config.get('use_demo', False))
+        mode = trading_mode(current_config)
         emit('bot_started', {
             'symbol': symbol,
-            'use_testnet': is_testnet,
+            'use_testnet': mode != 'LIVE',
+            'trading_mode': mode,
             'config': current_config
         })
         if shared_grid_engine:
@@ -567,7 +573,10 @@ def run_bot(config):
 
     try:
         bot_running = True
-        logger.system(f"Starting Grid Bot: {config['symbol']} (Testnet: {config.get('use_testnet', True)})")
+        logger.system(
+            f"Starting Grid Bot: {config['symbol']} "
+            f"(Mode: {trading_mode(config)})"
+        )
 
         # ─── Initialize components ───
         client = BinanceClient(config, logger)
@@ -580,7 +589,7 @@ def run_bot(config):
         socketio.emit('stats_update', {'balance': balance})
 
         if balance < 10:
-            raise Exception("Balance too low! Need at least $10 USDT on testnet.")
+            raise Exception("Balance too low! Need at least $10 USDT in the selected Futures environment.")
 
         risk_manager = RiskManager(config, client, logger)
         risk_manager.initialize()
@@ -613,7 +622,8 @@ def run_bot(config):
         client.symbol = grid_engine.symbol
         socketio.emit('bot_started', {
             'symbol': config['symbol'],
-            'use_testnet': config.get('use_testnet', True) and config.get('use_demo', True),
+            'use_testnet': trading_mode(config) != 'LIVE',
+            'trading_mode': trading_mode(config),
             'config': config
         })
 
@@ -817,7 +827,8 @@ def run_bot(config):
                     # Emit switch event to dashboard
                     socketio.emit('bot_started', {
                         'symbol': new_symbol,
-                        'use_testnet': config.get('use_testnet', True) and config.get('use_demo', True)
+                        'use_testnet': trading_mode(config) != 'LIVE',
+                        'trading_mode': trading_mode(config),
                     })
                     send_stats_update(grid_engine, client, risk_manager)
 
@@ -966,7 +977,7 @@ def load_config_file():
     if not config_path.exists():
         raise Exception(
             "config.json not found! Copy config.json.example to config.json "
-            "and fill in your Binance Testnet API keys."
+            "and fill in API keys for the selected Binance Futures environment."
         )
 
     with open(config_path, 'r') as f:
@@ -975,8 +986,8 @@ def load_config_file():
     # Validate
     if config.get('api_key', '').startswith('YOUR_'):
         raise Exception(
-            "API key not configured! Edit config.json with your "
-            "Binance Testnet API keys from https://testnet.binancefuture.com"
+            "API key not configured! Edit config.json with API keys for "
+            "the selected Binance Futures environment."
         )
 
     return config

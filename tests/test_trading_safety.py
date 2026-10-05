@@ -15,7 +15,7 @@ from auto_portfolio_manager import get_smart_max_position
 from grid_engine import GridEngine, GridLevel, GridOrderStatus, GridSide
 from quant_engine import QuantEngine
 from risk_manager import RiskManager
-from trading_rules import effective_leverage, is_stablecoin_pair
+from trading_rules import effective_leverage, is_stablecoin_pair, trading_mode
 
 
 class FakeLogger:
@@ -304,6 +304,78 @@ class TradingSafetyTests(unittest.TestCase):
             ],
             10,
         )
+
+    def test_trading_mode_prioritizes_demo_and_never_mislabels_safe_modes_as_live(self):
+        self.assertEqual(
+            trading_mode({"use_demo": False, "use_testnet": False}), "LIVE"
+        )
+        self.assertEqual(
+            trading_mode({"use_demo": False, "use_testnet": True}), "TESTNET"
+        )
+        self.assertEqual(
+            trading_mode({"use_demo": True, "use_testnet": False}), "DEMO"
+        )
+        self.assertEqual(
+            trading_mode({"use_demo": True, "use_testnet": True}), "DEMO"
+        )
+        self.assertEqual(trading_mode({}), "TESTNET")
+
+    def test_exchange_connection_enables_current_binance_demo_endpoints(self):
+        class DemoExchange:
+            def __init__(self):
+                self.demo_enabled = False
+                self.leverage_calls = []
+
+            def enable_demo_trading(self, enabled):
+                self.demo_enabled = enabled
+
+            def load_time_difference(self):
+                return None
+
+            def fetch_time(self):
+                return 1_700_000_000_000
+
+            def set_leverage(self, leverage, symbol):
+                self.leverage_calls.append((leverage, symbol))
+
+            def set_margin_mode(self, mode, symbol):
+                return None
+
+        exchange = DemoExchange()
+        client = BinanceClient(
+            {
+                "symbol": "ADA/USDT",
+                "leverage": 5,
+                "api_key": "test-key",
+                "api_secret": "test-secret",
+                "use_testnet": True,
+                "use_demo": True,
+            },
+            self.logger,
+        )
+
+        with patch("binance_client.ccxt.binance", return_value=exchange):
+            client.connect()
+
+        self.assertTrue(exchange.demo_enabled)
+        self.assertEqual(exchange.leverage_calls, [(5, "ADA/USDT")])
+
+    def test_websocket_endpoint_matches_resolved_exchange_mode(self):
+        from binance_ws import BinanceWSClient
+
+        demo_ws = BinanceWSClient(
+            {"symbol": "ADA/USDT", "use_demo": True, "use_testnet": True},
+            None,
+            self.logger,
+        )
+        testnet_ws = BinanceWSClient(
+            {"symbol": "ADA/USDT", "use_demo": False, "use_testnet": True},
+            None,
+            self.logger,
+        )
+
+        self.assertEqual(demo_ws.ws_base_url, "wss://demo-fstream.binance.com/ws")
+        self.assertEqual(testnet_ws.ws_base_url, "wss://stream.binancefuture.com/ws")
 
     def test_exchange_connection_applies_fixed_stablecoin_pair_leverage(self):
         class FakeExchange:

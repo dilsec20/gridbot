@@ -204,6 +204,7 @@ Edit `config.json`:
   "api_key": "YOUR_BINANCE_TESTNET_API_KEY",
   "api_secret": "YOUR_BINANCE_TESTNET_API_SECRET",
   "use_testnet": true,
+  "use_demo": false,
   "symbol": "ETH/USDT",
   "grid_levels": 8,
   "grid_spacing_usdt": 3.0,
@@ -214,6 +215,8 @@ Edit `config.json`:
   "max_position_usdt": 0
 }
 ```
+
+Set `use_demo` to `true` to use Binance's current Futures Demo Trading endpoints; when both safety flags are `true`, Demo Trading takes precedence. Use credentials created for the selected Binance environment. The dashboard shows `BINANCE DEMO` or `TESTNET`; only when both flags are `false` does it show `REAL MONEY LIVE`.
 
 ### Step 3: Run the Live Dashboard
 ```bash

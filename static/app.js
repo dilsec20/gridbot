@@ -74,11 +74,17 @@ function connectSocket() {
             if (data.config) populateFormConfig(data.config);
             const modeLabel = document.getElementById('modeLabel');
             if (modeLabel && data.use_testnet !== undefined) {
-                if (!data.use_testnet) {
+                if (data.trading_mode === 'LIVE' || (data.trading_mode === undefined && !data.use_testnet)) {
                     modeLabel.textContent = 'REAL MONEY LIVE';
                     modeLabel.className = 'badge badge-live';
-                } else {
+                } else if (data.trading_mode === 'DEMO') {
+                    modeLabel.textContent = 'BINANCE DEMO';
+                    modeLabel.className = 'badge badge-testnet';
+                } else if (data.trading_mode === 'TESTNET') {
                     modeLabel.textContent = 'TESTNET';
+                    modeLabel.className = 'badge badge-testnet';
+                } else {
+                    modeLabel.textContent = 'DEMO / TESTNET';
                     modeLabel.className = 'badge badge-testnet';
                 }
             }
@@ -504,11 +510,17 @@ function handleBotStarted(data) {
     
     const modeLabel = document.getElementById('modeLabel');
     if (modeLabel) {
-        if (data.use_testnet === false) {
+        if (data.trading_mode === 'LIVE' || (data.trading_mode === undefined && data.use_testnet === false)) {
             modeLabel.textContent = 'REAL MONEY LIVE';
             modeLabel.className = 'badge badge-live';
-        } else {
+        } else if (data.trading_mode === 'DEMO') {
+            modeLabel.textContent = 'BINANCE DEMO';
+            modeLabel.className = 'badge badge-testnet';
+        } else if (data.trading_mode === 'TESTNET') {
             modeLabel.textContent = 'TESTNET';
+            modeLabel.className = 'badge badge-testnet';
+        } else {
+            modeLabel.textContent = 'DEMO / TESTNET';
             modeLabel.className = 'badge badge-testnet';
         }
     }
