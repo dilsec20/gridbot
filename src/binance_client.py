@@ -17,6 +17,7 @@ class BinanceClient:
         self.logger = logger
         self.exchange = None
         self.symbol = config["symbol"]
+        self.actual_leverage = None
         self.config["leverage"] = effective_leverage(
             self.symbol, self.config.get("leverage", 5)
         )
@@ -103,25 +104,50 @@ class BinanceClient:
             self.logger.warn(f"Could not set margin mode (may already be set): {e}")
 
     def set_symbol_leverage(self, symbol: str, leverage: int | None = None):
-        """Apply exchange leverage or fail closed before trading."""
+        """Set and verify exchange leverage, failing closed if it cannot be read back."""
         requested_leverage = effective_leverage(
             symbol,
             leverage if leverage is not None else self.config.get("leverage", 5),
         )
         try:
             self.exchange.set_leverage(requested_leverage, symbol)
+            fetch_leverage = getattr(self.exchange, "fetch_leverage", None)
+            if not callable(fetch_leverage):
+                raise RuntimeError("Installed ccxt cannot read back symbol leverage.")
+
+            leverage_info = fetch_leverage(symbol)
+            reported_values = {
+                int(value)
+                for value in (
+                    leverage_info.get("longLeverage"),
+                    leverage_info.get("shortLeverage"),
+                )
+                if value is not None
+            }
+            if not reported_values:
+                reported = leverage_info.get("leverage")
+                if reported is not None:
+                    reported_values.add(int(reported))
+            if reported_values != {requested_leverage}:
+                raise RuntimeError(
+                    f"Binance leverage read-back mismatch for {symbol}: "
+                    f"requested {requested_leverage}x, received "
+                    f"{sorted(reported_values) if reported_values else 'no leverage value'}."
+                )
         except Exception as e:
             self.logger.error(
-                f"Failed to set {requested_leverage}x leverage for {symbol}; "
+                f"Failed to set and verify {requested_leverage}x leverage for {symbol}; "
                 f"refusing to trade with unverified leverage: {e}"
             )
             raise RuntimeError(
-                f"Could not set leverage for {symbol}; bot startup/switch aborted."
+                f"Could not set and verify leverage for {symbol}; "
+                "bot startup/switch aborted."
             ) from e
 
-        self.config["leverage"] = requested_leverage
+        self.actual_leverage = requested_leverage
+        self.config["leverage"] = self.actual_leverage
         self.logger.system(
-            f"Leverage set to {requested_leverage}x for {symbol}"
+            f"Leverage verified at {self.actual_leverage}x for {symbol}"
         )
 
     def get_price(self) -> float:

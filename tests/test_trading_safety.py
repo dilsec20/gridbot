@@ -338,6 +338,9 @@ class TradingSafetyTests(unittest.TestCase):
             def set_leverage(self, leverage, symbol):
                 self.leverage_calls.append((leverage, symbol))
 
+            def fetch_leverage(self, symbol):
+                return {"longLeverage": 5, "shortLeverage": 5}
+
             def set_margin_mode(self, mode, symbol):
                 return None
 
@@ -391,6 +394,9 @@ class TradingSafetyTests(unittest.TestCase):
             def set_leverage(self, leverage, symbol):
                 self.leverage_calls.append((leverage, symbol))
 
+            def fetch_leverage(self, symbol):
+                return {"longLeverage": 10, "shortLeverage": 10}
+
             def set_margin_mode(self, mode, symbol):
                 return None
 
@@ -409,6 +415,40 @@ class TradingSafetyTests(unittest.TestCase):
             client.connect()
 
         self.assertEqual(exchange.leverage_calls, [(10, "USDC/USDT")])
+        self.assertEqual(client.actual_leverage, 10)
+
+    def test_exchange_connection_aborts_if_leverage_readback_does_not_match(self):
+        class MismatchedLeverageExchange:
+            def load_time_difference(self):
+                return None
+
+            def fetch_time(self):
+                return 1_700_000_000_000
+
+            def set_leverage(self, leverage, symbol):
+                return None
+
+            def fetch_leverage(self, symbol):
+                return {"longLeverage": 3, "shortLeverage": 3}
+
+        client = BinanceClient(
+            {
+                "symbol": "ADA/USDT",
+                "leverage": 5,
+                "api_key": "test-key",
+                "api_secret": "test-secret",
+                "use_testnet": False,
+                "use_demo": False,
+            },
+            self.logger,
+        )
+
+        with patch(
+            "binance_client.ccxt.binance",
+            return_value=MismatchedLeverageExchange(),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "set and verify leverage"):
+                client.connect()
 
     def test_exchange_connection_aborts_if_leverage_setting_fails(self):
         class FailedLeverageExchange:

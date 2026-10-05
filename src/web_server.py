@@ -410,6 +410,7 @@ def handle_connect():
             'symbol': symbol,
             'use_testnet': mode != 'LIVE',
             'trading_mode': mode,
+            'leverage': getattr(_cached_client, 'actual_leverage', current_config.get('leverage')),
             'config': current_config
         })
         if shared_grid_engine:
@@ -624,6 +625,7 @@ def run_bot(config):
             'symbol': config['symbol'],
             'use_testnet': trading_mode(config) != 'LIVE',
             'trading_mode': trading_mode(config),
+            'leverage': client.actual_leverage,
             'config': config
         })
 
@@ -793,10 +795,8 @@ def run_bot(config):
                     config['grid_spacing_percent'] = switch_config.get('grid_spacing_percent', 0.5)
                     config['grid_spacing_usdt'] = switch_config.get('grid_spacing_usdt', 1.0)
                     config['quantity_per_grid'] = switch_config.get('quantity', 0.001)
-                    config['leverage'] = switch_config.get('recommended_leverage', 5)
-
                     # 4. Preserve any explicit hard cap; dynamic allocation stays balance-based.
-                    new_leverage = config['leverage']
+                    new_leverage = config.get('leverage', 5)
                     if not config.get('user_set_max_position'):
                         config['max_position_usdt'] = 0.0
                     # 5. Reinitialize client for new symbol
@@ -829,6 +829,7 @@ def run_bot(config):
                         'symbol': new_symbol,
                         'use_testnet': trading_mode(config) != 'LIVE',
                         'trading_mode': trading_mode(config),
+                        'leverage': client.actual_leverage,
                     })
                     send_stats_update(grid_engine, client, risk_manager)
 
