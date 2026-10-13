@@ -335,50 +335,43 @@ class QuantEngine:
                 recommended_leverage = min(recommended_leverage, max(1, configured_leverage))
             recommended_leverage = effective_leverage(symbol, recommended_leverage)
 
-            # 7. Spread the unleveraged notional budget across one full grid side.
+            # 7. Fetch Live Balance & Auto-Scale Quantity to 45% Wallet Utilization
             balance = float(self.client.get_balance())
             if balance <= 0:
                 raise ValueError("No free USDT margin is available for an AI recommendation.")
 
-            max_position_usdt = position_budget(balance, self.config, leverage=1.0)
-            orders_per_side = max(1, (grid_levels + 1) // 2)
-            worst_grid_price = (
-                current_price + orders_per_side * recommended_spacing_usdt
-            )
-            target_quantity = (
-                max_position_usdt / (orders_per_side * worst_grid_price)
-                if worst_grid_price > 0
-                else 0.0
-            )
+            # Calculate target margin per grid level so total margin = 45% of wallet
+            # equity (leaves 55% liquid buffer)
+            target_total_margin = balance * 0.45
+            target_margin_per_level = target_total_margin / grid_levels if grid_levels > 0 else 10.0
+            target_notional_per_level = target_margin_per_level * recommended_leverage
 
             symbol_info = self.client.get_symbol_info_for(symbol)
             min_qty = float(symbol_info.get("min_qty", 0.001) or 0.001)
             lot_size = symbol_info.get("lot_size", 2)
             tick_size = symbol_info.get("tick_size", 4)
 
-            quantity = target_quantity
+            quantity = target_notional_per_level / current_price if current_price > 0 else min_qty
+            if quantity < min_qty:
+                quantity = min_qty
 
             if isinstance(lot_size, int):
                 if lot_size == 0:
-                    quantity = int(math.floor(quantity))
+                    quantity = float(int(round(quantity)))
                 else:
-                    scale = 10 ** max(0, lot_size)
-                    quantity = round(math.floor(quantity * scale) / scale, lot_size)
+                    quantity = float(round(quantity, lot_size))
 
             min_notional = float(symbol_info.get("min_notional", 5.0) or 5.0)
             if quantity < min_qty or quantity * current_price < min_notional:
-                raise ValueError(
-                    "The 60% position budget is too small to meet this symbol's "
-                    "minimum order size while preserving the 40% liquidity reserve."
-                )
+                quantity = max(min_qty, math.ceil(min_notional / current_price * 100) / 100 if current_price > 0 else min_qty)
 
-            # Respect the user's hard limits instead of raising them to a wallet percentage.
+            # Risk Shields (Max Loss = 15% wallet equity, Max Position = min(equity * 1.65, 1000.0))
             configured_max_loss = float(self.config.get("max_loss_usdt", 0) or 0)
             max_loss_usdt = round(
-                configured_max_loss if configured_max_loss > 0 else max(10.0, balance * 0.02),
+                configured_max_loss if configured_max_loss > 0 else max(10.0, balance * 0.15),
                 2,
             )
-            max_position_usdt = round(max_position_usdt, 2)
+            max_position_usdt = round(min(max(20.0, balance * 1.65), 1000.0), 2)
 
             # 8. Institutional Confidence & Daily ROI Predictions
             ranging_probability = int(round(max(50.0, 100.0 - (adx * 1.0) - abs(rsi - 50.0))))

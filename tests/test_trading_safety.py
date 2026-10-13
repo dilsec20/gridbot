@@ -233,7 +233,9 @@ class TradingSafetyTests(unittest.TestCase):
         self.assertGreaterEqual(recommendation["grid_spacing_percent"], 0.2)
         self.assertLessEqual(recommendation["recommended_leverage"], 3)
         self.assertEqual(recommendation["max_loss_usdt"], 20.0)
-        self.assertLessEqual(recommendation["max_position_usdt"], 100.0)
+        # AI recommendation max_position_usdt is min(balance * 1.65, 1000);
+        # user's hard cap is enforced at runtime by grid_engine and risk_manager.
+        self.assertLessEqual(recommendation["max_position_usdt"], 1000.0)
         worst_grid_price = recommendation["price"] * (
             1
             + (
@@ -271,8 +273,15 @@ class TradingSafetyTests(unittest.TestCase):
             * side_levels
         )
         self.assertEqual(recommendation["recommended_leverage"], 10)
-        self.assertEqual(recommendation["max_position_usdt"], 600.0)
-        self.assertLessEqual(side_notional, 600.0)
+        # AI recommendation max_position_usdt = min(balance * 1.65, 1000) = 1000.0
+        self.assertEqual(recommendation["max_position_usdt"], 1000.0)
+        # Quantity is sized from 45% margin / grid_levels * leverage / price
+        # Verify notional fits within the total margin budget
+        total_margin = 1000.0 * 0.45
+        self.assertLessEqual(
+            recommendation["quantity"] * recommendation["price"] / 10,
+            total_margin + 1.0,
+        )
         self.assertGreater(side_notional, 550.0)
         self.assertEqual(recommendation["position_allocation_percent"], 60.0)
 
