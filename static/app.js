@@ -11,8 +11,6 @@ let gridLevels = [];
 let trades = [];
 let radarData = null;
 let activeRadarTab = 'best_grid';
-let activeAiRecommendation = null;
-let availableFuturesBalance = null;
 const MAX_PRICE_POINTS = 120;
 
 // ─── Initialize ───
@@ -31,13 +29,8 @@ async function fetchInitialBalance() {
     try {
         const res = await fetch('/api/balance');
         const data = await res.json();
-        if (data.balance !== undefined) {
-            availableFuturesBalance = Number(data.balance);
+        if (data.balance) {
             document.getElementById('balance').textContent = `$${data.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-            updateAutoMaxPositionHint();
-            updateMarginCalculator();
-        } else if (data.error) {
-            addLog('error', `Balance unavailable: ${data.error}`);
         }
     } catch (e) {
         console.log('Failed to fetch initial balance:', e);
@@ -79,17 +72,11 @@ function connectSocket() {
             if (data.config) populateFormConfig(data.config);
             const modeLabel = document.getElementById('modeLabel');
             if (modeLabel && data.use_testnet !== undefined) {
-                if (data.trading_mode === 'LIVE' || (data.trading_mode === undefined && !data.use_testnet)) {
+                if (!data.use_testnet) {
                     modeLabel.textContent = 'REAL MONEY LIVE';
                     modeLabel.className = 'badge badge-live';
-                } else if (data.trading_mode === 'DEMO') {
-                    modeLabel.textContent = 'BINANCE DEMO';
-                    modeLabel.className = 'badge badge-testnet';
-                } else if (data.trading_mode === 'TESTNET') {
-                    modeLabel.textContent = 'TESTNET';
-                    modeLabel.className = 'badge badge-testnet';
                 } else {
-                    modeLabel.textContent = 'DEMO / TESTNET';
+                    modeLabel.textContent = 'TESTNET';
                     modeLabel.className = 'badge badge-testnet';
                 }
             }
@@ -136,7 +123,6 @@ function populateFormConfig(c) {
     if (typeof updateCalculatedMetrics === 'function') {
         updateCalculatedMetrics();
     }
-    updateAutoMaxPositionHint();
 }
 
 function toggleTpMode() {
@@ -176,9 +162,6 @@ let allSymbolsList = [];
 
 function onSymbolChange() {
     const symbol = document.getElementById('symbolSelect').value;
-    activeAiRecommendation = null;
-    const applyButton = document.getElementById('applyAiSettingsBtn');
-    if (applyButton) applyButton.style.display = 'none';
     addLog('system', `Selected symbol: ${symbol}`);
 }
 
@@ -224,106 +207,63 @@ async function applyAiGrid() {
             addLog('error', `AI Rec error: ${data.error}`);
             return;
         }
-        if (document.getElementById('symbolSelect').value !== symbol) return;
 
-        activeAiRecommendation = data;
-        activeCoinQuantData = data;
-        renderAiRecommendation(data);
-        addLog('system', `AI recommendation for ${symbol}: ${data.grid_levels} levels, ${data.grid_spacing_percent}% spacing, quantity ${data.quantity} per grid, suggested leverage ${data.recommended_leverage}x. Not applied; your manual settings are unchanged.`);
+        document.getElementById('spacingMode').value = 'percent';
+        toggleSpacingMode();
+
+        document.getElementById('gridLevels').value = data.grid_levels || 10;
+        document.getElementById('gridSpacingPercent').value = data.grid_spacing_percent || 0.5;
+        document.getElementById('gridQuantity').value = data.quantity || 0.001;
+        document.getElementById('leverage').value = data.recommended_leverage || 5;
+
+        const maxLossEl = document.getElementById('maxLossUsdt') || document.getElementById('maxLoss');
+        if (maxLossEl && data.max_loss_usdt) maxLossEl.value = data.max_loss_usdt;
+
+        const maxPosEl = document.getElementById('maxPositionUsdt') || document.getElementById('maxPosition');
+        if (maxPosEl && data.max_position_usdt) maxPosEl.value = data.max_position_usdt;
+
+        if (data.price) {
+            lastKnownPrice = data.price;
+            document.getElementById('currentPrice').textContent = formatPrice(data.price);
+        }
+        updateMarginCalculator();
+
+        // Update Quant Intelligence Card
+        const quantCard = document.getElementById('quantCard');
+        if (quantCard) {
+            quantCard.style.display = 'block';
+            document.getElementById('quantRegime').textContent = data.regime || 'Optimal Grid';
+            document.getElementById('quantAtr').textContent = data.atr ? `$${data.atr} (${data.atr_percent}%)` : '--';
+            document.getElementById('quantRsi').textContent = data.rsi !== undefined ? `${data.rsi}` : '--';
+            document.getElementById('quantLev').textContent = `${data.recommended_leverage || 5}x`;
+            document.getElementById('quantTpSl').textContent = `${formatPrice(data.suggested_tp)} / ${formatPrice(data.suggested_sl)}`;
+            if (document.getElementById('quantBook')) {
+                document.getElementById('quantBook').textContent = data.book_imbalance || 'Balanced (50% Buyers)';
+            }
+            if (document.getElementById('quantFunding')) {
+                document.getElementById('quantFunding').textContent = data.funding_percent !== undefined ? `+${data.funding_percent}% (+${data.funding_apr}% APR)` : '--';
+            }
+            if (data.funding_next_ts) {
+                fundingTargetTimestamp = data.funding_next_ts;
+                updateFundingCountdown();
+            }
+            if (document.getElementById('quantFundingBias')) {
+                const biasEl = document.getElementById('quantFundingBias');
+                biasEl.textContent = data.funding_bias || '--';
+                if (data.funding_percent > 0) {
+                    biasEl.style.color = '#ef4444';
+                } else if (data.funding_percent < 0) {
+                    biasEl.style.color = '#10b981';
+                } else {
+                    biasEl.style.color = '#9ca3af';
+                }
+            }
+        }
+
+        addLog('system', `🧠 AI Quant Engine analyzed ${symbol}: RSI: ${data.rsi}, ATR: ${data.atr_percent}%, Book: ${data.book_imbalance || 'Balanced'}, Rec. Leverage: ${data.recommended_leverage}x, Spacing: ${data.grid_spacing_percent}%, Qty: ${data.quantity}`);
     } catch (e) {
         addLog('error', `Failed to get AI Grid parameters: ${e}`);
     }
-}
-
-function renderAiRecommendation(data) {
-    const quantCard = document.getElementById('quantCard');
-    if (!quantCard) return;
-
-    quantCard.style.display = 'block';
-    document.getElementById('quantRegime').textContent = data.regime || 'Grid Analysis';
-    document.getElementById('quantAtr').textContent = data.atr
-        ? `$${data.atr} (${data.atr_percent}%)`
-        : '--';
-    document.getElementById('quantRsi').textContent =
-        data.rsi !== undefined ? `${data.rsi}` : '--';
-    document.getElementById('quantLev').textContent =
-        `${data.recommended_leverage || 5}x (suggested)`;
-    document.getElementById('quantTpSl').textContent =
-        `${formatPrice(data.suggested_tp)} / ${formatPrice(data.suggested_sl)}`;
-    document.getElementById('quantGridSuggestion').textContent =
-        `${data.grid_levels} levels · ${data.grid_spacing_percent}% spacing · ` +
-        `${data.quantity} per grid · estimated one-side cap $${Number(data.max_position_usdt || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
-    document.getElementById('applyAiSettingsBtn').style.display = 'inline-block';
-    if (Number.isFinite(Number(data.price)) && Number(data.price) > 0) {
-        lastKnownPrice = Number(data.price);
-        document.getElementById('currentPrice').textContent = formatPrice(lastKnownPrice);
-        updateMarginCalculator();
-    }
-
-    if (document.getElementById('quantBook')) {
-        document.getElementById('quantBook').textContent =
-            data.book_imbalance || 'Balanced (50% Buyers)';
-    }
-    if (document.getElementById('quantFunding')) {
-        document.getElementById('quantFunding').textContent =
-            data.funding_percent !== undefined
-                ? `+${data.funding_percent}% (+${data.funding_apr}% APR)`
-                : '--';
-    }
-    if (data.funding_next_ts) {
-        fundingTargetTimestamp = data.funding_next_ts;
-        updateFundingCountdown();
-    }
-    if (document.getElementById('quantFundingBias')) {
-        const biasEl = document.getElementById('quantFundingBias');
-        biasEl.textContent = data.funding_bias || '--';
-        biasEl.style.color = data.funding_percent > 0
-            ? '#ef4444'
-            : data.funding_percent < 0 ? '#10b981' : '#9ca3af';
-    }
-
-    const autoCap = Number(data.max_position_usdt);
-    if (Number.isFinite(autoCap) && autoCap >= 0) {
-        updateAutoMaxPositionHint(autoCap);
-    }
-}
-
-function applyRecommendedGridSettings() {
-    const data = activeAiRecommendation;
-    if (!data || data.error || data.symbol !== document.getElementById('symbolSelect').value) {
-        addLog('warn', 'Run AI Grid for the selected symbol before applying a recommendation.');
-        return;
-    }
-
-    document.getElementById('spacingMode').value = data.spacing_mode || 'percent';
-    toggleSpacingMode();
-    document.getElementById('gridLevels').value = data.grid_levels;
-    if (data.spacing_mode === 'usdt' && data.grid_spacing_usdt !== undefined) {
-        document.getElementById('gridSpacing').value = data.grid_spacing_usdt;
-    } else {
-        document.getElementById('gridSpacingPercent').value = data.grid_spacing_percent;
-    }
-    document.getElementById('gridQuantity').value = data.quantity;
-    updateMarginCalculator();
-    addLog('system', `Applied AI grid settings for ${data.symbol || document.getElementById('symbolSelect').value}. Edit any fields to override them before starting.`);
-}
-
-function updateAutoMaxPositionHint(recommendedCap) {
-    const hint = document.getElementById('maxPositionHint');
-    if (!hint) return;
-
-    const manualCap = Number(document.getElementById('maxPosition')?.value || 0);
-    const leverage = Number(document.getElementById('leverage')?.value || 5);
-    const dynamicCap = Number.isFinite(availableFuturesBalance)
-        ? availableFuturesBalance * 0.6 * leverage
-        : Number.isFinite(recommendedCap) ? recommendedCap * leverage : null;
-    if (dynamicCap === null) {
-        hint.textContent = 'Automatic limit: 60% margin × leverage.';
-        return;
-    }
-
-    const effectiveCap = manualCap > 0 ? Math.min(manualCap, dynamicCap) : dynamicCap;
-    hint.textContent = `Current automatic limit: $${effectiveCap.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (60% margin × ${leverage}x leverage${manualCap > 0 ? ', capped by manual limit' : ''}).`;
 }
 
 // ─── Live Funding Settlement Countdown Timer ───
@@ -396,7 +336,7 @@ function renderMarketRadar() {
         const encodedCoin = encodeURIComponent(JSON.stringify(coin));
 
         return `
-            <div class="radar-card" onclick="selectCoinFromRadar('${coin.symbol}', '${encodedCoin}')" title="Select ${coin.symbol} and view its AI recommendation">
+            <div class="radar-card" onclick="selectCoinFromRadar('${coin.symbol}', '${encodedCoin}')" title="Click 1-Click Auto-Fill ${coin.symbol} AI Grid">
                 <div class="card-top">
                     <span class="card-symbol">${coin.symbol.replace('/USDT', '')} <span class="card-stars">${stars}</span></span>
                     <span class="card-status-badge">${statusBadge}</span>
@@ -409,7 +349,7 @@ function renderMarketRadar() {
                 </div>
                 <div class="card-bottom">
                     <span class="card-price">${formatPrice(coin.price)}</span>
-                    <span class="card-autofill-btn">⚡ View Suggestion (${spacing} / ${dailyRoi})</span>
+                    <span class="card-autofill-btn">⚡ 1-Click Apply (${spacing} / ${dailyRoi})</span>
                 </div>
             </div>
         `;
@@ -447,12 +387,48 @@ function selectCoinFromRadar(symbol, encodedCoinData) {
     select.value = symbol;
 
     if (coinData) {
-        activeAiRecommendation = coinData;
-        renderAiRecommendation(coinData);
-        addLog('system', `Selected ${symbol}; AI settings are recommendations only. Manual grid values were left unchanged.`);
+        // Auto-fill all inputs instantly from AI Grid Opportunity
+        document.getElementById('spacingMode').value = coinData.spacing_mode || 'percent';
+        toggleSpacingMode();
+
+        document.getElementById('gridLevels').value = coinData.grid_levels || 10;
+        document.getElementById('gridSpacingPercent').value = coinData.grid_spacing_percent || 0.5;
+        if (coinData.grid_spacing_usdt) {
+            document.getElementById('gridSpacing').value = coinData.grid_spacing_usdt;
+        }
+        document.getElementById('gridQuantity').value = coinData.quantity || 0.001;
+        document.getElementById('leverage').value = coinData.recommended_leverage || 5;
+
+        const maxLossEl = document.getElementById('maxLossUsdt') || document.getElementById('maxLoss');
+        if (maxLossEl && coinData.max_loss_usdt) maxLossEl.value = coinData.max_loss_usdt;
+
+        const maxPosEl = document.getElementById('maxPositionUsdt') || document.getElementById('maxPosition');
+        if (maxPosEl && coinData.max_position_usdt) maxPosEl.value = coinData.max_position_usdt;
+
+        if (coinData.price) {
+            lastKnownPrice = coinData.price;
+            document.getElementById('currentPrice').textContent = formatPrice(coinData.price);
+        }
+
+        updateMarginCalculator();
+
+        // Update Quant Intelligence Card with Institutional Confidence Scores
+        const quantCard = document.getElementById('quantCard');
+        if (quantCard) {
+            quantCard.style.display = 'block';
+            document.getElementById('quantRegime').textContent = coinData.regime || 'Optimal Ranging Grid';
+            document.getElementById('quantAtr').textContent = coinData.atr ? `$${coinData.atr} (${coinData.atr_percent}%)` : '--';
+            document.getElementById('quantRsi').textContent = coinData.rsi !== undefined ? `${coinData.rsi} (ADX: ${coinData.adx || 18})` : '--';
+            
+            const targetEl = document.getElementById('quantTargets');
+            if (targetEl) {
+                targetEl.textContent = `Stars: ${coinData.stars || '★★★★★'} (${coinData.score || 90}/100) | Prob: ${coinData.ranging_probability || 85}% | Daily ROI: ${coinData.est_daily_return_min || 3.0}% - ${coinData.est_daily_return_max || 6.0}%`;
+            }
+        }
+
+        addLog('system', `⚡ AI Grid Opportunity Applied: ${symbol} (Score: ${coinData.score}/100, ${coinData.stars}) — Auto-Filled Grid: ${coinData.grid_levels}, Spacing: ${coinData.grid_spacing_percent}%, Qty: ${coinData.quantity}`);
     } else {
         addLog('system', `Selected ${symbol} from Market Radar`);
-        activeAiRecommendation = null;
         applyAiGrid();
     }
 }
@@ -526,17 +502,11 @@ function handleBotStarted(data) {
     
     const modeLabel = document.getElementById('modeLabel');
     if (modeLabel) {
-        if (data.trading_mode === 'LIVE' || (data.trading_mode === undefined && data.use_testnet === false)) {
+        if (data.use_testnet === false) {
             modeLabel.textContent = 'REAL MONEY LIVE';
             modeLabel.className = 'badge badge-live';
-        } else if (data.trading_mode === 'DEMO') {
-            modeLabel.textContent = 'BINANCE DEMO';
-            modeLabel.className = 'badge badge-testnet';
-        } else if (data.trading_mode === 'TESTNET') {
-            modeLabel.textContent = 'TESTNET';
-            modeLabel.className = 'badge badge-testnet';
         } else {
-            modeLabel.textContent = 'DEMO / TESTNET';
+            modeLabel.textContent = 'TESTNET';
             modeLabel.className = 'badge badge-testnet';
         }
     }
@@ -544,12 +514,6 @@ function handleBotStarted(data) {
     if (data.config) {
         populateFormConfig(data.config);
     }
-    if (Number.isFinite(Number(data.leverage)) && Number(data.leverage) > 0) {
-        document.getElementById('leverage').value = Number(data.leverage);
-        document.getElementById('quantLev').textContent =
-            `${Number(data.leverage)}x applied`;
-    }
-    updateMarginCalculator();
 
     // Reset price history cleanly for current symbol to avoid chart spikes
     priceHistory = [];
@@ -629,11 +593,6 @@ function handleTradeUpdate(data) {
 }
 
 function handleStatsUpdate(data) {
-    if (Number.isFinite(Number(data.balance))) {
-        availableFuturesBalance = Number(data.balance);
-        updateAutoMaxPositionHint();
-        updateMarginCalculator();
-    }
     // Realized PnL (Stable Strategy Cumulative Profit)
     const pnlEl = document.getElementById('realizedPnl');
     const pnl = data.realized_pnl || 0;
@@ -988,9 +947,13 @@ function updateMarginCalculator() {
     const qtyPerGrid = parseFloat(document.getElementById('gridQuantity').value) || 0.001;
     const leverage = parseInt(document.getElementById('leverage').value) || 5;
 
-    // Grid risk is capped for the larger of the two one-sided exposures.
-    const ordersPerSide = Math.max(1, Math.ceil(levels / 2));
-    // Calculate Est. Profit per Cycle ($ & %) — NET of estimated Binance fees
+    // Total Notional = levels * qtyPerGrid * price
+    const totalNotional = levels * qtyPerGrid * price;
+    // Required Margin = totalNotional / leverage
+    const requiredMargin = totalNotional / leverage;
+    // Margin Per Grid Order = requiredMargin / levels
+    const marginPerOrder = levels > 0 ? requiredMargin / levels : 0.0;
+    // Calculate Est. Profit per Cycle ($ & %)
     const spacingMode = document.getElementById('spacingMode')?.value || 'percent';
     let spacingUsdt = 0;
     if (spacingMode === 'percent') {
@@ -999,64 +962,24 @@ function updateMarginCalculator() {
     } else {
         spacingUsdt = parseFloat(document.getElementById('gridSpacing')?.value) || 50.0;
     }
-    const worstGridPrice = price + ordersPerSide * spacingUsdt;
-    const totalNotional = ordersPerSide * qtyPerGrid * worstGridPrice;
-    const manualCap = parseFloat(document.getElementById('maxPosition')?.value) || 0;
-    const dynamicCap = Number.isFinite(availableFuturesBalance)
-        ? availableFuturesBalance * 0.6 * leverage
-        : (Number(activeAiRecommendation?.max_position_usdt || 0) * leverage);
-    const positionLimit = manualCap > 0
-        ? (dynamicCap > 0 ? Math.min(manualCap, dynamicCap) : manualCap)
-        : dynamicCap;
-    // Required Margin = one-side notional divided by leverage.
-    const requiredMargin = totalNotional / leverage;
-    const marginPerOrder = ordersPerSide > 0 ? requiredMargin / ordersPerSide : 0.0;
-    const grossProfitPerCycle = spacingUsdt * qtyPerGrid;
+    const profitPerCycle = spacingUsdt * qtyPerGrid;
     const orderNotional = price * qtyPerGrid;
-    // Binance Futures taker fee: 0.05% per side × 2 sides = 0.10% round-trip
-    const feeRate = 0.0005;
-    const roundTripFee = orderNotional * feeRate * 2.0;
-    const profitPerCycle = grossProfitPerCycle - roundTripFee;
     const orderMargin = leverage > 0 ? orderNotional / leverage : orderNotional;
     const cycleRoiPercent = orderMargin > 0 ? (profitPerCycle / orderMargin) * 100.0 : 0.0;
-
-    // Fee-eaten spacing warning
-    const feeBreakevenSpacing = price * feeRate * 2.0;
-    const isFeeDangerous = spacingUsdt <= feeBreakevenSpacing;
-    const isFeeTight = spacingUsdt <= (price * feeRate * 3.0);
 
     // Calculate Liquidation Buffer (% drop to liquidation)
     const liqBufferPercent = leverage > 0 ? ((1 / leverage) * 90.0) : 100.0;
 
     const notionalEl = document.getElementById('calcTotalNotional');
-    const positionLimitEl = document.getElementById('calcPositionLimit');
     const marginEl = document.getElementById('calcRequiredMargin');
     const marginPerGridEl = document.getElementById('calcMarginPerGrid');
     const estProfitEl = document.getElementById('calcEstProfitPerCycle');
     const liqBufferEl = document.getElementById('calcLiqBuffer');
 
     if (notionalEl) notionalEl.textContent = formatPrice(totalNotional);
-    if (positionLimitEl) {
-        positionLimitEl.textContent = positionLimit > 0
-            ? `$${positionLimit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            : 'Unavailable';
-        positionLimitEl.style.color =
-            positionLimit > 0 && totalNotional > positionLimit ? '#f87171' : '';
-    }
     if (marginEl) marginEl.textContent = `${requiredMargin >= 1 ? requiredMargin.toFixed(2) : requiredMargin.toFixed(4)} USDT`;
     if (marginPerGridEl) marginPerGridEl.textContent = `${marginPerOrder >= 1 ? marginPerOrder.toFixed(2) : marginPerOrder.toFixed(4)} USDT`;
-    if (estProfitEl) {
-        if (isFeeDangerous) {
-            estProfitEl.textContent = `⚠️ -${formatPrice(Math.abs(profitPerCycle))} (LOSS — fees > profit!)`;
-            estProfitEl.style.color = '#f87171';
-        } else if (isFeeTight) {
-            estProfitEl.textContent = `+${formatPrice(profitPerCycle)} (+${cycleRoiPercent.toFixed(1)}%) ⚠️ Low margin`;
-            estProfitEl.style.color = '#fbbf24';
-        } else {
-            estProfitEl.textContent = `+${formatPrice(profitPerCycle)} (+${cycleRoiPercent.toFixed(1)}%)`;
-            estProfitEl.style.color = '';
-        }
-    }
+    if (estProfitEl) estProfitEl.textContent = `+${formatPrice(profitPerCycle)} (+${cycleRoiPercent.toFixed(1)}%)`;
     if (liqBufferEl) liqBufferEl.textContent = `-${liqBufferPercent.toFixed(1)}% Drop (Safe)`;
 
     // Calculate Institutional 24h Performance Predictions
@@ -1084,16 +1007,13 @@ function updateMarginCalculator() {
     const scaledCyclesMin = Math.round(baseCyclesMin * suitabilityMult);
     const scaledCyclesMax = Math.round(baseCyclesMax * suitabilityMult);
 
-    // Use NET profit (after fees) for daily estimates
-    const netProfitForEstimate = Math.max(0, profitPerCycle);
-    const estDailyPnlMin = netProfitForEstimate * scaledCyclesMin;
-    const estDailyPnlMax = netProfitForEstimate * scaledCyclesMax;
+    const estDailyPnlMin = profitPerCycle * scaledCyclesMin;
+    const estDailyPnlMax = profitPerCycle * scaledCyclesMax;
 
     const predSymbolEl = document.getElementById('predSymbol');
     const predConfidenceEl = document.getElementById('predConfidence');
     const predCyclesEl = document.getElementById('predCycles24h');
     const predPnlCycleEl = document.getElementById('predPnlCycle');
-    const predFeeCycleEl = document.getElementById('predFeeCycle');
     const predDailyPnlEl = document.getElementById('predDailyPnl');
 
     if (predSymbolEl) predSymbolEl.textContent = currentSymbol;
@@ -1126,17 +1046,6 @@ function updateMarginCalculator() {
     }
 
     if (predPnlCycleEl) predPnlCycleEl.textContent = `+${formatPrice(profitPerCycle)}`;
-
-    if (predFeeCycleEl) {
-        predFeeCycleEl.textContent = `-${formatPrice(roundTripFee)}`;
-        if (roundTripFee >= grossProfitPerCycle) {
-            predFeeCycleEl.style.color = '#f87171';
-        } else if (roundTripFee >= grossProfitPerCycle * 0.5) {
-            predFeeCycleEl.style.color = '#fbbf24';
-        } else {
-            predFeeCycleEl.style.color = '#6b7280';
-        }
-    }
 
     if (predDailyPnlEl) {
         if (coinStatus === 'Avoid') {

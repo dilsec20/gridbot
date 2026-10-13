@@ -121,12 +121,7 @@
                             <span class="quant-label">Market Funding Impact Bias</span>
                             <span class="quant-val" id="quantFundingBias" style="font-weight: 600;">--</span>
                         </div>
-                        <div class="quant-item" style="grid-column: span 2;">
-                            <span class="quant-label">AI Grid Suggestion (not applied)</span>
-                            <span class="quant-val" id="quantGridSuggestion">Run AI Grid to see suggested settings.</span>
-                        </div>
                     </div>
-                    <button id="applyAiSettingsBtn" class="btn-ai-auto" onclick="applyRecommendedGridSettings()" style="display: none; margin-top: 10px;">Apply Suggested Grid Settings</button>
                 </div>
             </div>
 
@@ -167,20 +162,15 @@
                     <input type="number" id="gridQuantity" class="number-input" value="0.001" min="0.000001" step="any" oninput="updateMarginCalculator()">
                 </div>
                 <div class="form-group">
-                    <label>Leverage (applied at start)</label>
-                    <input type="number" id="leverage" class="number-input" value="5" min="1" max="20" oninput="updateMarginCalculator()">
-                    <small>Exchange leverage (1x - 20x). Verified at startup on Binance Futures.</small>
+                    <label>Leverage</label>
+                    <input type="number" id="leverage" class="number-input" value="5" min="1" max="50" oninput="updateMarginCalculator()">
                 </div>
 
                 <!-- Margin & Position Calculator -->
                 <div class="margin-calc-box" id="marginCalcBox">
                     <div class="calc-row">
-                        <span>Max One-Side Grid Exposure:</span>
+                        <span>Total Position Value:</span>
                         <strong id="calcTotalNotional">$0.00</strong>
-                    </div>
-                    <div class="calc-row">
-                        <span>Allowed One-Side Limit:</span>
-                        <strong id="calcPositionLimit">$0.00 USDT</strong>
                     </div>
                     <div class="calc-row">
                         <span>Wallet Margin Deducted:</span>
@@ -215,10 +205,6 @@
                         <strong id="predPnlCycle" style="color: #10b981;">+$0.52 USDT</strong>
                     </div>
                     <div class="calc-row">
-                        <span>Fees / Cycle:</span>
-                        <strong id="predFeeCycle" style="color: #f87171;">-$0.00 USDT</strong>
-                    </div>
-                    <div class="calc-row">
                         <span>Estimated Daily PnL:</span>
                         <strong id="predDailyPnl" style="color: #34d399; font-size: 13px; font-weight: 700;">+$14.5 – $18.7 USDT</strong>
                     </div>
@@ -232,9 +218,8 @@
                     <input type="number" id="maxLoss" class="number-input" value="100" min="10" step="10">
                 </div>
                 <div class="form-group">
-                    <label>Manual Max Position (USDT; 0 = automatic)</label>
-                    <input type="number" id="maxPosition" class="number-input" value="0" min="0" step="50" oninput="updateMarginCalculator(); updateAutoMaxPositionHint()">
-                    <small id="maxPositionHint">Automatic limit: 60% of available futures balance.</small>
+                    <label>Max Position (USDT)</label>
+                    <input type="number" id="maxPosition" class="number-input" value="500" min="50" step="50">
                 </div>
             </div>
 

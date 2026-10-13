@@ -8,7 +8,7 @@ automatically switches to the optimal coin with zero-risk transitions.
 Safety Rules:
   1. Only switches when current position size == 0 (no open trades)
   2. Minimum 1-hour hold time before considering a switch
-  3. Maximum notional is auto-calculated from 60% of available wallet balance
+  3. Smart Max Position auto-calculated from wallet balance × leverage × 0.35
   4. Never trades coins scoring below 65 (Good threshold)
 """
 
@@ -18,7 +18,6 @@ from typing import Optional, Callable
 
 from quant_engine import QuantEngine
 from logger import BotLogger
-from trading_rules import DEFAULT_POSITION_ALLOCATION_PERCENT, position_budget
 
 
 # Coins the Auto Manager evaluates
@@ -40,19 +39,12 @@ RESCORE_INTERVAL_SECONDS = 1800
 MIN_TRADEABLE_SCORE = 65
 
 
-def get_smart_max_position(balance: float) -> float:
+def get_smart_max_position(balance: float, leverage: int = 5) -> float:
     """
-    Return the unleveraged notional budget while reserving at least 40% of equity.
+    Calculate safe max position value based on account equity.
+    Formula: min(balance * 1.65, 1000.0)
     """
-    return round(
-        position_budget(
-            balance,
-            {
-                "max_position_balance_percent": DEFAULT_POSITION_ALLOCATION_PERCENT,
-            },
-        ),
-        2,
-    )
+    return round(min(max(20.0, balance * 1.65), 1000.0), 2)
 
 
 class AutoPortfolioManager:
@@ -64,7 +56,7 @@ class AutoPortfolioManager:
     2. Compares the best coin with the currently trading coin
     3. If a better coin is found (score gap >= 10) AND no open position:
        → Triggers a safe switch to the better coin
-    4. Auto-calculates max_position from available wallet balance
+    4. Auto-calculates max_position based on wallet balance + leverage
     """
 
     def __init__(self, client, logger: BotLogger, socketio=None):

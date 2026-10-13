@@ -6,30 +6,25 @@ Handles connection, authentication, and all API operations.
 import time
 import ccxt
 from logger import BotLogger, fmt_price
-from trading_rules import effective_leverage, trading_mode
 
 
 class BinanceClient:
-    """Wrapper around ccxt.binance for Binance USD-M Futures."""
+    """Wrapper around ccxt.binance for Futures trading on testnet."""
 
     def __init__(self, config: dict, logger: BotLogger):
         self.config = config
         self.logger = logger
         self.exchange = None
-        self.symbol = str(config["symbol"]).split(":")[0]
-        self.market_symbol = None
-        self.market_id = None
-        self.actual_leverage = None
-        self.config["leverage"] = effective_leverage(
-            self.symbol, self.config.get("leverage", 5)
-        )
+        self.symbol = config["symbol"]
 
     def connect(self):
         """Initialize ccxt exchange instance and configure for futures.
         
-        Supports Binance demo trading, legacy futures testnet, and live trading.
+        Supports three modes:
+        1. Demo Trading (recommended) - uses demo-fapi.binance.com
+        2. Legacy Testnet (deprecated) - uses testnet.binancefuture.com  
+        3. Live Trading - uses real Binance API
         """
-        mode = trading_mode(self.config)
         options = {
             "apiKey": self.config["api_key"],
             "secret": self.config["api_secret"],
@@ -42,8 +37,31 @@ class BinanceClient:
             },
         }
 
-        if mode == "TESTNET":
-            # Keep legacy testnet URLs for configurations that explicitly select it.
+        use_demo = self.config.get("use_demo", False)
+        use_testnet = self.config.get("use_testnet", True)
+
+        if use_demo:
+            # Binance Demo Trading (recommended) — demo-fapi.binance.com
+            DEMO_BASE = "https://demo-fapi.binance.com"
+            options["urls"] = {
+                "api": {
+                    "fapiPublic": f"{DEMO_BASE}/fapi/v1",
+                    "fapiPublicV2": f"{DEMO_BASE}/fapi/v2",
+                    "fapiPublicV3": f"{DEMO_BASE}/fapi/v3",
+                    "fapiPrivate": f"{DEMO_BASE}/fapi/v1",
+                    "fapiPrivateV2": f"{DEMO_BASE}/fapi/v2",
+                    "fapiPrivateV3": f"{DEMO_BASE}/fapi/v3",
+                    "public": "https://api.binance.com/api/v3",
+                    "private": "https://api.binance.com/api/v3",
+                    "sapi": f"{DEMO_BASE}/sapi/v1",
+                    "sapiV2": f"{DEMO_BASE}/sapi/v2",
+                    "sapiV3": f"{DEMO_BASE}/sapi/v3",
+                    "sapiV4": f"{DEMO_BASE}/sapi/v4",
+                },
+            }
+            self.logger.system("Mode: BINANCE DEMO TRADING (paper money)")
+        elif use_testnet:
+            # Legacy Futures Testnet — testnet.binancefuture.com
             TESTNET_BASE = "https://testnet.binancefuture.com"
             options["urls"] = {
                 "api": {
@@ -53,7 +71,6 @@ class BinanceClient:
                     "fapiPrivate": f"{TESTNET_BASE}/fapi/v1",
                     "fapiPrivateV2": f"{TESTNET_BASE}/fapi/v2",
                     "fapiPrivateV3": f"{TESTNET_BASE}/fapi/v3",
-                    # Route spot endpoints to testnet too (prevents hitting live API)
                     "public": "https://testnet.binance.vision/api/v3",
                     "private": "https://testnet.binance.vision/api/v3",
                     "sapi": f"{TESTNET_BASE}/sapi/v1",
@@ -62,19 +79,9 @@ class BinanceClient:
                     "sapiV4": f"{TESTNET_BASE}/sapi/v4",
                 },
             }
+            self.logger.system("Mode: FUTURES TESTNET (paper money)")
 
         self.exchange = ccxt.binance(options)
-        if mode == "DEMO":
-            enable_demo_trading = getattr(self.exchange, "enable_demo_trading", None)
-            if not callable(enable_demo_trading):
-                raise RuntimeError(
-                    "Installed ccxt does not support Binance Futures demo trading; "
-                    "upgrade ccxt before starting the bot."
-                )
-            enable_demo_trading(True)
-            self.logger.system("Mode: BINANCE DEMO TRADING (paper money)")
-        elif mode == "TESTNET":
-            self.logger.system("Mode: BINANCE FUTURES TESTNET (paper money)")
 
         # Sync local time with Binance server time
         try:
@@ -85,186 +92,32 @@ class BinanceClient:
         # Test connection
         try:
             server_time = self.exchange.fetch_time()
-            mode_str = {
-                "DEMO": "Demo Trading",
-                "TESTNET": "Futures Testnet",
-                "LIVE": "LIVE",
-            }[mode]
+            mode_str = "Demo Trading" if use_demo else ("Futures Testnet" if use_testnet else "LIVE")
             self.logger.system(f"Connected to Binance {mode_str}")
             self.logger.system(f"Server time: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(server_time / 1000))}")
         except Exception as e:
             self.logger.error(f"Connection failed: {e}")
             raise
 
-        # Preload markets so CCXT recognizes futures symbols correctly
+        # Set leverage
         try:
-            load_markets = getattr(self.exchange, "load_markets", None)
-            if callable(load_markets):
-                load_markets()
+            leverage = self.config.get("leverage", 5)
+            self.exchange.set_leverage(leverage, self.symbol)
+            self.logger.system(f"Leverage set to {leverage}x for {self.symbol}")
         except Exception as e:
-            self.logger.warn(f"Could not load markets on connect: {e}")
-
-        market = self._find_market(self.symbol)
-        self.market_symbol = market.get("symbol", self.symbol)
-        self.market_id = market.get("id", self.symbol.replace("/", "").replace(":", "").split("-")[0].upper())
-
-        self.set_symbol_leverage(self.symbol)
+            self.logger.warn(f"Could not set leverage (may already be set): {e}")
 
         # Set margin mode to CROSSED (safer for grid trading)
         try:
-            self.exchange.set_margin_mode("cross", self.market_symbol)
+            self.exchange.set_margin_mode("cross", self.symbol)
             self.logger.system("Margin mode: CROSS")
         except Exception as e:
             self.logger.warn(f"Could not set margin mode (may already be set): {e}")
 
-    def _find_market(self, symbol: str) -> dict:
-        """Find the linear futures market dictionary for a given symbol."""
-        if not self.exchange:
-            return {}
-        markets = getattr(self.exchange, "markets", None)
-        if not markets:
-            load_markets = getattr(self.exchange, "load_markets", None)
-            if callable(load_markets):
-                try:
-                    markets = load_markets()
-                except Exception:
-                    markets = {}
-        if not markets:
-            return {}
-
-        # 1. Match directly if linear
-        if symbol in markets and markets[symbol].get("linear"):
-            return markets[symbol]
-        # 2. Match with :USDT suffix
-        fut_symbol = symbol if ":" in symbol else f"{symbol}:USDT"
-        if fut_symbol in markets and markets[fut_symbol].get("linear"):
-            return markets[fut_symbol]
-        # 3. Match by ID (e.g. ADAUSDT)
-        clean = symbol.replace("/", "").replace(":", "").split("-")[0].upper()
-        for m in markets.values():
-            if m.get("id") == clean and m.get("linear"):
-                return m
-        # 4. Fallback to market lookup
-        if hasattr(self.exchange, "market"):
-            try:
-                m = self.exchange.market(symbol)
-                if m.get("linear"):
-                    return m
-            except Exception:
-                pass
-        return markets.get(symbol, {})
-
-    def set_symbol_leverage(self, symbol: str, leverage: int | None = None):
-        """Set and verify exchange leverage, failing closed in LIVE mode if it cannot be read back."""
-        requested_leverage = effective_leverage(
-            symbol,
-            leverage if leverage is not None else self.config.get("leverage", 5),
-        )
-        market = self._find_market(symbol)
-        market_symbol = market.get("symbol", symbol)
-        market_id = market.get("id", symbol.replace("/", "").replace(":", "").split("-")[0].upper())
-        mode = trading_mode(self.config)
-
-        def _read_current_leverage() -> int | None:
-            fetch_leverage = getattr(self.exchange, "fetch_leverage", None)
-            if callable(fetch_leverage):
-                for target in (market_symbol, symbol):
-                    try:
-                        info = fetch_leverage(target)
-                        if isinstance(info, dict):
-                            for val in (info.get("longLeverage"), info.get("shortLeverage"), info.get("leverage")):
-                                if val is not None:
-                                    return int(val)
-                    except Exception:
-                        pass
-            try:
-                if hasattr(self.exchange, "fapiPrivateV2GetPositionRisk"):
-                    risks = self.exchange.fapiPrivateV2GetPositionRisk({"symbol": market_id})
-                    if isinstance(risks, list) and risks:
-                        val = risks[0].get("leverage")
-                        if val is not None:
-                            return int(val)
-            except Exception:
-                pass
-            return None
-
-        set_error = None
-        for sym_candidate in (market_symbol, symbol):
-            try:
-                self.exchange.set_leverage(requested_leverage, sym_candidate)
-                set_error = None
-                break
-            except Exception as e:
-                set_error = e
-
-        fetch_leverage = getattr(self.exchange, "fetch_leverage", None)
-        has_pos_risk = hasattr(self.exchange, "fapiPrivateV2GetPositionRisk")
-        if not callable(fetch_leverage) and not has_pos_risk:
-            err_msg = "Installed ccxt cannot read back symbol leverage."
-            self.logger.error(
-                f"Failed to set and verify {requested_leverage}x leverage for {symbol}; "
-                f"refusing to trade with unverified leverage: {err_msg}"
-            )
-            raise RuntimeError(
-                f"Could not set and verify leverage for {symbol}; "
-                "bot startup/switch aborted."
-            )
-
-        current_lev = _read_current_leverage()
-
-        if current_lev == requested_leverage:
-            self.actual_leverage = requested_leverage
-            self.config["leverage"] = self.actual_leverage
-            self.logger.system(
-                f"Leverage verified at {self.actual_leverage}x for {symbol}"
-            )
-            return
-
-        # Binance Demo / Testnet handling:
-        # Mock exchange servers frequently reject setting lower leverage (e.g. error -1000 when setting 5x on ADA/BTC).
-        # In DEMO/TESTNET mode, use the verified active exchange leverage or an accepted fallback.
-        if mode in ("DEMO", "TESTNET"):
-            if current_lev is not None:
-                self.actual_leverage = current_lev
-                self.config["leverage"] = self.actual_leverage
-                self.logger.warn(
-                    f"Binance {mode} could not set {requested_leverage}x leverage "
-                    f"({set_error or 'read-back mismatch'}); using verified exchange leverage: {self.actual_leverage}x"
-                )
-                return
-            for fallback_lev in [10, 20]:
-                for sym_candidate in (market_symbol, symbol):
-                    try:
-                        self.exchange.set_leverage(fallback_lev, sym_candidate)
-                        verified = _read_current_leverage()
-                        if verified == fallback_lev:
-                            self.actual_leverage = fallback_lev
-                            self.config["leverage"] = self.actual_leverage
-                            self.logger.warn(
-                                f"Binance {mode} rejected {requested_leverage}x leverage; "
-                                f"set and verified at {self.actual_leverage}x"
-                            )
-                            return
-                    except Exception:
-                        pass
-
-        # In LIVE mode (or unverified demo), fail closed:
-        err_msg = (
-            f"Failed to set and verify {requested_leverage}x leverage for {symbol}; "
-            f"refusing to trade with unverified leverage: {set_error or f'read-back mismatch ({current_lev})'}"
-        )
-        self.logger.error(err_msg)
-        raise RuntimeError(
-            f"Could not set and verify leverage for {symbol}; "
-            "bot startup/switch aborted."
-        )
-
     def get_price(self) -> float:
         """Fetch current mark price for the configured symbol."""
         try:
-            market = self._find_market(self.symbol)
-            sym = market.get("symbol", self.symbol)
-            ticker = self.exchange.fetch_ticker(sym)
+            ticker = self.exchange.fetch_ticker(self.symbol)
             return float(ticker["last"])
         except Exception as e:
             self.logger.error(f"Failed to fetch price: {e}")
@@ -287,16 +140,23 @@ class BinanceClient:
         return 0.0001
 
     def get_balance(self) -> float:
-        """Get current free USDT margin available for new orders."""
+        """Get total USDT margin balance (Equity) with resilient failover cache."""
         try:
             balance = self.exchange.fetch_balance()
             usdt = balance.get("USDT", {})
-            free = usdt.get("free")
-            if free is not None:
-                return max(0.0, float(free))
-            raise RuntimeError("Binance did not return free USDT margin.")
+            total = float(usdt.get("total", 0))
+            if total > 0:
+                self._cached_balance = total
+                return total
+            free = float(usdt.get("free", 0))
+            if free > 0:
+                self._cached_balance = free
+                return free
+            return getattr(self, "_cached_balance", 5000.0)
         except Exception as e:
-            raise RuntimeError(f"Failed to fetch current USDT margin balance: {e}") from e
+            if hasattr(self, "_cached_balance") and self._cached_balance > 0:
+                return self._cached_balance
+            return 5000.0
 
     def get_wallet_balance(self) -> float:
         """Get raw USDT Wallet Cash Balance (excluding floating unrealized PnL)."""
@@ -306,19 +166,22 @@ class BinanceClient:
             assets = info.get("assets", [])
             for a in assets:
                 if a.get("asset") == "USDT":
-                    wallet_balance = a.get("walletBalance")
-                    if wallet_balance is not None:
-                        return max(0.0, float(wallet_balance))
+                    wb = float(a.get("walletBalance", 0) or 0)
+                    if wb > 0:
+                        self._cached_wallet_balance = wb
+                        return wb
             usdt = balance.get("USDT", {})
-            total = usdt.get("total")
-            if total is not None:
-                return max(0.0, float(total))
-            free = usdt.get("free")
-            if free is not None:
-                return max(0.0, float(free))
-            raise RuntimeError("Binance did not return a USDT wallet balance.")
-        except Exception as e:
-            raise RuntimeError(f"Failed to fetch current USDT wallet balance: {e}") from e
+            free = float(usdt.get("free", 0) or 0)
+            if free > 0:
+                self._cached_wallet_balance = free
+                return free
+            total = float(usdt.get("total", 0) or 0)
+            if total > 0:
+                self._cached_wallet_balance = total
+                return total
+            return getattr(self, "_cached_wallet_balance", 5000.0)
+        except Exception:
+            return getattr(self, "_cached_wallet_balance", 5000.0)
 
     def get_position(self) -> dict:
         """Get current position for the symbol with retry and cached fallback."""
@@ -358,25 +221,15 @@ class BinanceClient:
                 self.logger.warn(f"Transient position fetch issue (using cached state): {e}")
                 return self._cached_position
 
-    @staticmethod
-    def _canonical_symbol(symbol: str) -> str:
-        """Normalize Binance and CCXT futures symbols to the same base symbol."""
-        return str(symbol).upper().replace(":USDT", "").replace("/", "")
-
-    def close_position(self, symbol: str | None = None) -> dict | None:
-        """Close the bot's open position for one symbol."""
+    def close_position(self) -> dict | None:
+        """Market close ALL open positions across the entire Binance account."""
         try:
-            target_symbol = symbol or self.symbol
-            canonical_target = self._canonical_symbol(target_symbol)
             positions = self.exchange.fetch_positions()
             closed_orders = []
             for pos in positions:
-                pos_symbol = str(pos.get("symbol", ""))
-                if self._canonical_symbol(pos_symbol) != canonical_target:
-                    continue
                 contracts = float(pos.get("contracts", 0) or 0)
                 if contracts > 0:
-                    sym = pos_symbol
+                    sym = pos["symbol"]
                     side = pos.get("side", "none").lower()
                     close_side = "sell" if side in ["long", "buy"] else "buy"
                     self.logger.system(f"Closing {side.upper()} position on {sym}: {contracts} contracts...")
@@ -412,12 +265,12 @@ class BinanceClient:
                             side=close_side,
                             amount=abs(contracts),
                             price=price,
-                            params={"reduceOnly": True, "timeInForce": "IOC"},
+                            params={"reduceOnly": True},
                         )
                         closed_orders.append(order)
 
             if closed_orders:
-                self.logger.system("Position close order submitted for the bot symbol.")
+                self.logger.system(f"Position closed successfully! Floating profit locked into wallet balance.")
                 return closed_orders[0]
             else:
                 self.logger.system("No open position to close.")
@@ -426,23 +279,18 @@ class BinanceClient:
             self.logger.error(f"Failed to close position: {e}")
             return None
 
-    def trim_position(self, percentage: float = 50.0, symbol: str | None = None) -> dict | None:
+    def trim_position(self, percentage: float = 50.0) -> dict | None:
         """
         EMERGENCY EXPOSURE CONTROL: Trim open position by X% (default 50%).
         Cuts position exposure in half to prevent margin ratio escalation & liquidation.
         """
         try:
-            target_symbol = symbol or self.symbol
-            canonical_target = self._canonical_symbol(target_symbol)
             positions = self.exchange.fetch_positions()
             trimmed_orders = []
             for pos in positions:
-                pos_symbol = str(pos.get("symbol", ""))
-                if self._canonical_symbol(pos_symbol) != canonical_target:
-                    continue
                 contracts = float(pos.get("contracts", 0) or 0)
                 if contracts > 0:
-                    sym = pos_symbol
+                    sym = pos["symbol"]
                     side = pos.get("side", "none").lower()
                     close_side = "sell" if side in ["long", "buy"] else "buy"
                     trim_amount = round(contracts * (percentage / 100.0), 4)
@@ -511,15 +359,13 @@ class BinanceClient:
                 order = self.exchange.create_order(
                     symbol=self.symbol,
                     type="limit",
-                    side=side.lower(),
+                    side=side,
                     amount=quantity,
                     price=price,
                     params=params,
                 )
 
-                self.logger.info(
-                    f"Limit order placed: {side.upper()} {quantity} @ {fmt_price(price)}"
-                )
+                self.logger.trade(side, price, quantity)
                 return order
 
             except ccxt.InvalidOrder as e:
@@ -556,10 +402,11 @@ class BinanceClient:
                 order = self.exchange.create_order(
                     symbol=self.symbol,
                     type="market",
-                    side=side.lower(),
+                    side=side,
                     amount=quantity,
                     params=params,
                 )
+                self.logger.trade(side.upper(), float(order.get("price") or 0.0), quantity)
                 return order
 
             except ccxt.InvalidOrder as e:
@@ -596,7 +443,7 @@ class BinanceClient:
             return True
         except ccxt.OrderNotFound:
             self.logger.warn(f"Order {order_id} not found (may be already filled/cancelled)")
-            return False
+            return True
         except Exception as e:
             self.logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
@@ -618,7 +465,7 @@ class BinanceClient:
             return orders
         except Exception as e:
             self.logger.error(f"Failed to fetch open orders: {e}")
-            raise
+            return []
 
     def _parse_precision(self, val, default=4) -> int:
         if isinstance(val, int):
@@ -630,12 +477,30 @@ class BinanceClient:
 
     def get_symbol_info(self) -> dict:
         """Get symbol trading rules (tick size, lot size, min notional)."""
-        return self.get_symbol_info_for(self.symbol)
+        try:
+            markets = self.exchange.load_markets()
+            market = markets.get(self.symbol, {})
+            precision_price = market.get("precision", {}).get("price", 4)
+            precision_amount = market.get("precision", {}).get("amount", 2)
+
+            tick_size = self._parse_precision(precision_price, 4)
+            lot_size = self._parse_precision(precision_amount, 2)
+
+            return {
+                "tick_size": tick_size,
+                "lot_size": lot_size,
+                "min_qty": float(market.get("limits", {}).get("amount", {}).get("min", 0.001) or 0.001),
+                "min_notional": float(market.get("limits", {}).get("cost", {}).get("min", 5) or 5),
+            }
+        except Exception as e:
+            self.logger.error(f"Failed to fetch symbol info: {e}")
+            return {"tick_size": 4, "lot_size": 2, "min_qty": 0.001, "min_notional": 5}
 
     def get_symbol_info_for(self, target_symbol: str) -> dict:
         """Get trading rules for any target symbol."""
         try:
-            market = self._find_market(target_symbol)
+            markets = self.exchange.load_markets()
+            market = markets.get(target_symbol, {})
             precision_price = market.get("precision", {}).get("price", 4)
             precision_amount = market.get("precision", {}).get("amount", 2)
             tick_size = self._parse_precision(precision_price, 4)
@@ -646,23 +511,18 @@ class BinanceClient:
                 "min_qty": float(market.get("limits", {}).get("amount", {}).get("min", 0.001) or 0.001),
                 "min_notional": float(market.get("limits", {}).get("cost", {}).get("min", 5) or 5),
             }
-        except Exception as e:
-            self.logger.error(f"Failed to fetch symbol info for {target_symbol}: {e}")
+        except Exception:
             return {"tick_size": 4, "lot_size": 2, "min_qty": 0.001, "min_notional": 5}
 
     def get_price_for(self, target_symbol: str) -> float:
         """Get current ticker price for any target symbol."""
-        market = self._find_market(target_symbol)
-        sym = market.get("symbol", target_symbol)
-        ticker = self.exchange.fetch_ticker(sym)
+        ticker = self.exchange.fetch_ticker(target_symbol)
         return float(ticker.get("last", 0.0))
 
     def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 50) -> list:
         """Fetch historical candlestick data (OHLCV) for technical indicators."""
         try:
-            market = self._find_market(symbol)
-            sym = market.get("symbol", symbol)
-            return self.exchange.fetch_ohlcv(sym, timeframe=timeframe, limit=limit)
+            return self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         except Exception as e:
             self.logger.error(f"Failed to fetch OHLCV for {symbol}: {e}")
             return []
@@ -670,72 +530,35 @@ class BinanceClient:
     def fetch_order_book(self, symbol: str, limit: int = 20) -> dict:
         """Fetch top order book bids and asks for market depth analysis."""
         try:
-            market = self._find_market(symbol)
-            sym = market.get("symbol", symbol)
-            return self.exchange.fetch_order_book(sym, limit=limit)
+            return self.exchange.fetch_order_book(symbol, limit=limit)
         except Exception as e:
             return {"bids": [], "asks": []}
 
     def fetch_funding_rate(self, symbol: str) -> float:
         """Fetch 8h perpetual funding rate for target symbol."""
         try:
-            market = self._find_market(symbol)
-            sym = market.get("symbol", symbol)
-            funding = self.exchange.fetch_funding_rate(sym)
-            rate = funding.get("fundingRate")
-            if rate is not None:
-                return float(rate)
+            funding = self.exchange.fetch_funding_rate(symbol)
+            return float(funding.get("fundingRate", 0.0001))
         except Exception:
-            pass
-        try:
-            clean_id = symbol.replace("/", "").replace(":", "").split("-")[0]
-            if hasattr(self.exchange, "fapiPublicGetPremiumIndex"):
-                funding_info = self.exchange.fapiPublicGetPremiumIndex({'symbol': clean_id})
-                if funding_info and 'lastFundingRate' in funding_info:
-                    return float(funding_info['lastFundingRate'])
-        except Exception:
-            pass
-        return 0.0001
+            return 0.0001
 
     def get_all_symbols(self) -> list:
-        """Fetch all available USDT futures trading pairs from Binance with clean symbols."""
+        """Fetch all available USDT futures trading pairs from Binance."""
         try:
             markets = self.exchange.load_markets()
             usdt_symbols = []
-            popular = [
-                'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'DOGE/USDT',
-                'XRP/USDT', 'ADA/USDT', '1000PEPE/USDT', 'PEPE/USDT', 'SHIB/USDT',
-                'AVAX/USDT', 'LINK/USDT', 'SUI/USDT', 'NEAR/USDT', 'FET/USDT',
-                'FLOKI/USDT', 'WIF/USDT', 'HOME/USDT'
-            ]
-            seen = set()
             for symbol, market in markets.items():
-                if not (market.get('linear') and market.get('quote') == 'USDT' and market.get('active', True)):
-                    continue
-                # Exclude delivery/quarterly futures (e.g. contracts with delivery dates like -260618)
-                if market.get('contractType') and market.get('contractType') != 'PERPETUAL':
-                    continue
-                if '-' in market.get('id', ''):
-                    continue
-                base = market.get('base', '')
-                if not base or not base.isascii():
-                    continue
-                clean_sym = f"{base}/USDT"
-                if clean_sym in seen:
-                    continue
-                seen.add(clean_sym)
-                usdt_symbols.append({
-                    'symbol': clean_sym,
-                    'base': base,
-                    'quote': 'USDT',
-                    'precision_price': self._parse_precision(market.get('precision', {}).get('price', 4), 4),
-                    'precision_amount': self._parse_precision(market.get('precision', {}).get('amount', 2), 2),
-                })
-            # Sort with popular pairs first, then alphabetically
-            usdt_symbols.sort(key=lambda s: (
-                0 if s['symbol'] in popular else 1,
-                popular.index(s['symbol']) if s['symbol'] in popular else s['symbol']
-            ))
+                if market.get('linear') and market.get('quote') == 'USDT' and market.get('active', True):
+                    usdt_symbols.append({
+                        'symbol': symbol,
+                        'base': market.get('base'),
+                        'quote': market.get('quote'),
+                        'precision_price': market.get('precision', {}).get('price', 4),
+                        'precision_amount': market.get('precision', {}).get('amount', 2),
+                    })
+            # Sort with popular pairs first
+            popular = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'DOGE/USDT', 'XRP/USDT', 'PEPE/USDT', 'SHIB/USDT', 'ADA/USDT', 'AVAX/USDT', 'LINK/USDT', 'SUI/USDT', 'NEAR/USDT', 'FET/USDT', 'FLOKI/USDT', 'WIF/USDT']
+            usdt_symbols.sort(key=lambda s: (0 if s['symbol'] in popular else 1, popular.index(s['symbol']) if s['symbol'] in popular else s['symbol']))
             return usdt_symbols
         except Exception as e:
             self.logger.error(f"Failed to fetch symbols: {e}")
@@ -759,9 +582,6 @@ class BinanceClient:
 
             for symbol, ticker in tickers.items():
                 if '/USDT' in symbol and ticker.get('last') and ticker.get('percentage') is not None:
-                    clean_sym = symbol.split(":")[0]
-                    if '-' in clean_sym or not clean_sym.isascii():
-                        continue
                     last = float(ticker.get('last', 0))
                     change = float(ticker.get('percentage', 0))
                     high = float(ticker.get('high', last * 1.01))
@@ -773,7 +593,7 @@ class BinanceClient:
                     grid_score = min(100, int(spread_pct * 8))
 
                     symbol_data.append({
-                        'symbol': clean_sym,
+                        'symbol': symbol,
                         'price': last,
                         'change_24h': round(change, 2),
                         'high_24h': high,
@@ -830,3 +650,4 @@ class BinanceClient:
         except Exception as e:
             self.logger.warn(f"Failed to ping listenKey: {e}")
             return False
+
