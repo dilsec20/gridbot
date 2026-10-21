@@ -70,18 +70,24 @@ function connectSocket() {
     socket.on('bot_config_sync', function(data) {
         if (data) {
             if (data.config) populateFormConfig(data.config);
-            const modeLabel = document.getElementById('modeLabel');
-            if (modeLabel && data.use_testnet !== undefined) {
-                if (!data.use_testnet) {
-                    modeLabel.textContent = 'REAL MONEY LIVE';
-                    modeLabel.className = 'badge badge-live';
-                } else {
-                    modeLabel.textContent = 'TESTNET';
-                    modeLabel.className = 'badge badge-testnet';
-                }
-            }
+            updateModeLabel(data);
         }
     });
+}
+
+function updateModeLabel(data) {
+    const modeLabel = document.getElementById('modeLabel');
+    if (!modeLabel || !data) return;
+    if (data.use_demo) {
+        modeLabel.textContent = 'DEMO TRADING';
+        modeLabel.className = 'badge badge-testnet';
+    } else if (data.use_testnet) {
+        modeLabel.textContent = 'TESTNET';
+        modeLabel.className = 'badge badge-testnet';
+    } else {
+        modeLabel.textContent = 'REAL MONEY LIVE';
+        modeLabel.className = 'badge badge-live';
+    }
 }
 
 function populateFormConfig(c) {
@@ -471,12 +477,16 @@ function startBot() {
 
 function stopBot() {
     addLog('system', 'Stopping bot...');
-    socket.emit('stop_bot');
+    const select = document.getElementById('symbolSelect');
+    const symbol = select ? select.value : '';
+    socket.emit('stop_bot', { symbol: symbol });
 }
 
 function stopAndClosePosition() {
     addLog('system', '⚡ Stopping bot & market-closing open position...');
-    socket.emit('stop_and_close');
+    const select = document.getElementById('symbolSelect');
+    const symbol = select ? select.value : '';
+    socket.emit('stop_and_close', { symbol: symbol });
 }
 
 function handleBotStarted(data) {
@@ -500,16 +510,7 @@ function handleBotStarted(data) {
         }
     }
     
-    const modeLabel = document.getElementById('modeLabel');
-    if (modeLabel) {
-        if (data.use_testnet === false) {
-            modeLabel.textContent = 'REAL MONEY LIVE';
-            modeLabel.className = 'badge badge-live';
-        } else {
-            modeLabel.textContent = 'TESTNET';
-            modeLabel.className = 'badge badge-testnet';
-        }
-    }
+    updateModeLabel(data);
 
     if (data.config) {
         populateFormConfig(data.config);

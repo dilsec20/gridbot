@@ -159,7 +159,10 @@ def enforce_dashboard_security():
 bot_thread = None
 bot_running = False
 bot_stop_event = threading.Event()
-current_config = {}
+try:
+    current_config = load_config_file()
+except Exception:
+    current_config = {}
 perf_tracker = None
 
 _cached_client = None
@@ -420,8 +423,14 @@ def handle_connect():
         emit('auto_mode_update', {'active': False})
 
     # Always sync current saved configuration & mode badge to UI on connect
-    is_testnet = bool(current_config.get('use_testnet', False) or current_config.get('use_demo', False))
-    emit('bot_config_sync', {'config': current_config, 'use_testnet': is_testnet})
+    if not current_config:
+        try:
+            current_config = load_config_file()
+        except Exception:
+            current_config = {}
+    is_demo = bool(current_config.get('use_demo', False))
+    is_testnet = bool(current_config.get('use_testnet', False) or is_demo)
+    emit('bot_config_sync', {'config': current_config, 'use_testnet': is_testnet, 'use_demo': is_demo})
 
     # Sync bot running state & grid levels
     global shared_grid_engine, shared_risk_manager, _cached_client, bot_thread, bot_running
@@ -430,10 +439,10 @@ def handle_connect():
 
     if bot_running:
         symbol = current_config.get('symbol', 'SOL/USDT')
-        is_testnet = bool(current_config.get('use_testnet', False) or current_config.get('use_demo', False))
         emit('bot_started', {
             'symbol': symbol,
             'use_testnet': is_testnet,
+            'use_demo': is_demo,
             'config': current_config
         })
         if shared_grid_engine:
@@ -497,9 +506,17 @@ def handle_start_bot(config):
 
 
 @socketio.on('stop_bot')
-def handle_stop_bot():
+def handle_stop_bot(data=None):
     """Stop the trading bot and cancel all active orders on Binance."""
-    global bot_running
+    global bot_running, current_config, shared_grid_engine
+    target_symbol = None
+    if isinstance(data, dict) and data.get('symbol'):
+        target_symbol = data.get('symbol')
+    elif current_config and current_config.get('symbol'):
+        target_symbol = current_config.get('symbol')
+    elif shared_grid_engine and hasattr(shared_grid_engine, 'symbol'):
+        target_symbol = shared_grid_engine.symbol
+
     if bot_running:
         bot_stop_event.set()
         emit('log_message', {'level': 'system', 'message': 'Shutdown signal sent...'})
@@ -508,7 +525,10 @@ def handle_stop_bot():
         try:
             client = get_shared_client()
             if client:
-                client.cancel_all_orders()
+                if target_symbol:
+                    client.symbol = target_symbol
+                    client.cancel_all_orders(target_symbol)
+                client.cancel_all_orders_all_symbols()
                 emit('log_message', {'level': 'system', 'message': 'Cancelled leftover orders on Binance.'})
         except Exception:
             pass
@@ -516,20 +536,33 @@ def handle_stop_bot():
 
 
 @socketio.on('stop_and_close')
-def handle_stop_and_close():
+def handle_stop_and_close(data=None):
     """Stop bot, cancel all grid orders, AND market-close open position to lock profit into cash balance."""
-    global bot_running
+    global bot_running, current_config, shared_grid_engine
     emit('log_message', {'level': 'system', 'message': '⚡ Emergency Stop & Market Closing Position...'})
 
     if bot_running:
         bot_stop_event.set()
 
+    target_symbol = None
+    if isinstance(data, dict) and data.get('symbol'):
+        target_symbol = data.get('symbol')
+    elif current_config and current_config.get('symbol'):
+        target_symbol = current_config.get('symbol')
+    elif shared_grid_engine and hasattr(shared_grid_engine, 'symbol'):
+        target_symbol = shared_grid_engine.symbol
+
     try:
         client = get_shared_client()
         if client:
-            client.cancel_all_orders()
+            if target_symbol:
+                client.symbol = target_symbol
+                client.cancel_all_orders(target_symbol)
+            client.cancel_all_orders_all_symbols()
             time.sleep(0.5)
-            client.close_position()
+
+            # Close all open positions across symbols to eliminate risk
+            closed = client.close_all_positions()
             time.sleep(1)
             fresh_balance = client.get_wallet_balance()
             emit('stats_update', {
@@ -539,7 +572,10 @@ def handle_stop_and_close():
                 'balance': fresh_balance,
                 'position_info': 'No position',
             })
-            emit('log_message', {'level': 'system', 'message': f'✅ Position market-closed! Fresh Wallet Balance: ${fresh_balance:,.2f} USDT'})
+            if closed:
+                emit('log_message', {'level': 'system', 'message': f'✅ Closed {len(closed)} open position(s)! Fresh Wallet Balance: ${fresh_balance:,.2f} USDT'})
+            else:
+                emit('log_message', {'level': 'system', 'message': f'ℹ️ No active positions found to close. Fresh Wallet Balance: ${fresh_balance:,.2f} USDT'})
     except Exception as e:
         emit('log_message', {'level': 'error', 'message': f'Close position error: {str(e)}'})
 
@@ -633,9 +669,12 @@ def run_bot(config):
         # Synchronize auto-detected symbol across config & client
         config['symbol'] = grid_engine.symbol
         client.symbol = grid_engine.symbol
+        is_demo = bool(config.get('use_demo', False))
+        is_testnet = bool(config.get('use_testnet', False) or is_demo)
         socketio.emit('bot_started', {
             'symbol': config['symbol'],
-            'use_testnet': config.get('use_testnet', True) and config.get('use_demo', True),
+            'use_testnet': is_testnet,
+            'use_demo': is_demo,
             'config': config
         })
 
@@ -845,9 +884,12 @@ def run_bot(config):
                     logger.system(f"\U0001f916 ✅ Auto-switch complete! Now trading {new_symbol} (Score: {switch_config['score']}/100)")
 
                     # Emit switch event to dashboard
+                    is_demo = bool(config.get('use_demo', False))
+                    is_testnet = bool(config.get('use_testnet', False) or is_demo)
                     socketio.emit('bot_started', {
                         'symbol': new_symbol,
-                        'use_testnet': config.get('use_testnet', True) and config.get('use_demo', True)
+                        'use_testnet': is_testnet,
+                        'use_demo': is_demo,
                     })
                     send_stats_update(grid_engine, client, risk_manager)
 
