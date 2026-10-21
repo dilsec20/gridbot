@@ -9,6 +9,7 @@ import asyncio
 import threading
 import websockets
 from typing import Callable, Optional
+from trading_rules import trading_mode
 
 
 class BinanceWSClient:
@@ -24,14 +25,13 @@ class BinanceWSClient:
         self.logger = logger
         self.perf_tracker = perf_tracker
 
-        self.symbol = config.get("symbol", "BTC/USDT")
+        self.symbol = str(config.get("symbol", "BTC/USDT")).split(":")[0]
         self.formatted_symbol = self.symbol.replace("/", "").lower()
 
-        use_demo = config.get("use_demo", False)
-        use_testnet = config.get("use_testnet", True)
-        if use_demo:
+        mode = trading_mode(config)
+        if mode == "DEMO":
             self.ws_base_url = "wss://demo-fstream.binance.com/ws"
-        elif use_testnet:
+        elif mode == "TESTNET":
             self.ws_base_url = "wss://stream.binancefuture.com/ws"
         else:
             self.ws_base_url = "wss://fstream.binance.com/ws"
@@ -166,13 +166,15 @@ class BinanceWSClient:
                             order_status = order_info.get("X")    # FILLED, PARTIALLY_FILLED, etc.
                             order_id = str(order_info.get("i"))
 
-                            if order_status in ["FILLED", "PARTIALLY_FILLED"] and execution_type == "TRADE":
+                            if order_status == "FILLED" and execution_type == "TRADE":
                                 fill_data = {
                                     "order_id": order_id,
                                     "trade_id": str(order_info.get("t", "")),
                                     "client_order_id": str(order_info.get("c", "")),
                                     "status": order_status,
                                     "price": float(order_info.get("L", 0.0) or order_info.get("p", 0.0)),
+                                    "average_price": float(order_info.get("ap", 0.0) or 0.0),
+                                    "filled_quantity": float(order_info.get("z", 0.0) or 0.0),
                                     "side": str(order_info.get("S", "")).lower()
                                 }
                                 if self.on_order_fill:
