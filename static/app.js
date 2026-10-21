@@ -962,7 +962,11 @@ function updateMarginCalculator() {
     } else {
         spacingUsdt = parseFloat(document.getElementById('gridSpacing')?.value) || 50.0;
     }
-    const profitPerCycle = spacingUsdt * qtyPerGrid;
+    const grossProfitPerCycle = spacingUsdt * qtyPerGrid;
+    // Deduct estimated round-trip fees (0.05% taker × 2 sides)
+    const feeRate = 0.0005;
+    const roundTripFees = (price * qtyPerGrid * feeRate) + ((price + spacingUsdt) * qtyPerGrid * feeRate);
+    const profitPerCycle = grossProfitPerCycle - roundTripFees;
     const orderNotional = price * qtyPerGrid;
     const orderMargin = leverage > 0 ? orderNotional / leverage : orderNotional;
     const cycleRoiPercent = orderMargin > 0 ? (profitPerCycle / orderMargin) * 100.0 : 0.0;

@@ -566,7 +566,12 @@ class GridEngine:
 
         if filled_level.is_replacement:
             self.completed_cycles += 1
-            cycle_pnl = self.grid_spacing * self.quantity
+            gross_pnl = self.grid_spacing * self.quantity
+            # Deduct estimated round-trip exchange fees (buy + sell)
+            fee_rate = float(self.config.get("exchange_fee_rate", 0.0005) or 0.0005)
+            buy_fee = filled_level.price * self.quantity * fee_rate
+            sell_fee = (filled_level.price + self.grid_spacing) * self.quantity * fee_rate
+            cycle_pnl = gross_pnl - buy_fee - sell_fee
 
             self.risk_manager.add_realized_pnl(cycle_pnl)
             total_pnl = self.risk_manager.get_realized_pnl()
