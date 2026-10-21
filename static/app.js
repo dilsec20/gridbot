@@ -70,24 +70,18 @@ function connectSocket() {
     socket.on('bot_config_sync', function(data) {
         if (data) {
             if (data.config) populateFormConfig(data.config);
-            updateModeLabel(data);
+            const modeLabel = document.getElementById('modeLabel');
+            if (modeLabel && data.use_testnet !== undefined) {
+                if (!data.use_testnet) {
+                    modeLabel.textContent = 'REAL MONEY LIVE';
+                    modeLabel.className = 'badge badge-live';
+                } else {
+                    modeLabel.textContent = 'TESTNET';
+                    modeLabel.className = 'badge badge-testnet';
+                }
+            }
         }
     });
-}
-
-function updateModeLabel(data) {
-    const modeLabel = document.getElementById('modeLabel');
-    if (!modeLabel || !data) return;
-    if (data.use_demo) {
-        modeLabel.textContent = 'DEMO TRADING';
-        modeLabel.className = 'badge badge-testnet';
-    } else if (data.use_testnet) {
-        modeLabel.textContent = 'TESTNET';
-        modeLabel.className = 'badge badge-testnet';
-    } else {
-        modeLabel.textContent = 'REAL MONEY LIVE';
-        modeLabel.className = 'badge badge-live';
-    }
 }
 
 function populateFormConfig(c) {
@@ -477,16 +471,12 @@ function startBot() {
 
 function stopBot() {
     addLog('system', 'Stopping bot...');
-    const select = document.getElementById('symbolSelect');
-    const symbol = select ? select.value : '';
-    socket.emit('stop_bot', { symbol: symbol });
+    socket.emit('stop_bot');
 }
 
 function stopAndClosePosition() {
     addLog('system', '⚡ Stopping bot & market-closing open position...');
-    const select = document.getElementById('symbolSelect');
-    const symbol = select ? select.value : '';
-    socket.emit('stop_and_close', { symbol: symbol });
+    socket.emit('stop_and_close');
 }
 
 function handleBotStarted(data) {
@@ -510,7 +500,16 @@ function handleBotStarted(data) {
         }
     }
     
-    updateModeLabel(data);
+    const modeLabel = document.getElementById('modeLabel');
+    if (modeLabel) {
+        if (data.use_testnet === false) {
+            modeLabel.textContent = 'REAL MONEY LIVE';
+            modeLabel.className = 'badge badge-live';
+        } else {
+            modeLabel.textContent = 'TESTNET';
+            modeLabel.className = 'badge badge-testnet';
+        }
+    }
 
     if (data.config) {
         populateFormConfig(data.config);
@@ -963,11 +962,7 @@ function updateMarginCalculator() {
     } else {
         spacingUsdt = parseFloat(document.getElementById('gridSpacing')?.value) || 50.0;
     }
-    const grossProfitPerCycle = spacingUsdt * qtyPerGrid;
-    // Deduct estimated round-trip fees (0.05% taker × 2 sides)
-    const feeRate = 0.0005;
-    const roundTripFees = (price * qtyPerGrid * feeRate) + ((price + spacingUsdt) * qtyPerGrid * feeRate);
-    const profitPerCycle = grossProfitPerCycle - roundTripFees;
+    const profitPerCycle = spacingUsdt * qtyPerGrid;
     const orderNotional = price * qtyPerGrid;
     const orderMargin = leverage > 0 ? orderNotional / leverage : orderNotional;
     const cycleRoiPercent = orderMargin > 0 ? (profitPerCycle / orderMargin) * 100.0 : 0.0;
