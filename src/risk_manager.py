@@ -71,9 +71,10 @@ class RiskManager:
 
         return True
 
-    def check_position_limit(self) -> bool:
+    def check_position_limit(self, proposed_side: str = None, proposed_qty: float = 0.0, proposed_price: float = 0.0) -> bool:
         """
         Check if current position size is within limits.
+        If proposed order parameters are given, checks if proposed order + pending orders exceed max_position_usdt.
         Returns True if safe, False if position is too large.
         """
         position = self.client.get_position()
@@ -84,6 +85,25 @@ class RiskManager:
                 f"Position limit reached: ${notional:,.2f} > ${self.max_position_usdt:,.2f}"
             )
             return False
+
+        if proposed_side and proposed_qty > 0 and proposed_price > 0:
+            pending_notional = 0.0
+            try:
+                open_orders = self.client.get_open_orders()
+                for o in open_orders:
+                    if str(o.get("side", "")).lower() == proposed_side.lower():
+                        q = float(o.get("amount", o.get("quantity", 0)) or 0)
+                        p = float(o.get("price", 0) or 0)
+                        pending_notional += q * p
+            except Exception:
+                pass
+
+            total_projected = notional + pending_notional + (proposed_qty * proposed_price)
+            if total_projected > self.max_position_usdt:
+                self.logger.risk(
+                    f"Projected position limit reached: ${total_projected:,.2f} > ${self.max_position_usdt:,.2f}"
+                )
+                return False
 
         return True
 
@@ -188,7 +208,7 @@ class RiskManager:
             except Exception as e:
                 self.logger.error(f"Failed to fetch balance for compounding cap: {e}")
 
-            final_qty = max(base_qty, round(target_qty, 6))
+            final_qty = round(target_qty, 6)
             return final_qty
 
         except Exception as e:

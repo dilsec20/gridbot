@@ -98,6 +98,7 @@ class GridEngine:
         self.grid_spacing = 0.0
         self.tick_size = 2
         self.is_running = False
+        self.fee_rate = float(config.get("exchange_fee_rate", 0.0005) or 0.0005)
 
         # Live boundary prices maintained in O(1) time
         self.lowest_buy_price: float = 0.0
@@ -557,21 +558,25 @@ class GridEngine:
             self.risk_manager.perf_tracker.record_fill(fill_notional)
 
         # Calculate replacement side and price
+        fill_ref_price = execution_price if execution_price else filled_level.price
         if filled_level.side == GridSide.BUY:
             new_side = GridSide.SELL
-            new_price = round(filled_level.price + self.grid_spacing, self.tick_size)
+            new_price = round(fill_ref_price + self.grid_spacing, self.tick_size)
         else:
             new_side = GridSide.BUY
-            new_price = round(filled_level.price - self.grid_spacing, self.tick_size)
+            new_price = round(fill_ref_price - self.grid_spacing, self.tick_size)
 
         if filled_level.is_replacement:
             self.completed_cycles += 1
             gross_pnl = self.grid_spacing * self.quantity
-            # Deduct estimated round-trip exchange fees (buy + sell)
-            fee_rate = float(self.config.get("exchange_fee_rate", 0.0005) or 0.0005)
-            buy_fee = filled_level.price * self.quantity * fee_rate
-            sell_fee = (filled_level.price + self.grid_spacing) * self.quantity * fee_rate
-            cycle_pnl = gross_pnl - buy_fee - sell_fee
+            # Deduct estimated round-trip exchange fees (both entry and exit legs)
+            if filled_level.side == GridSide.SELL:
+                entry_p = filled_level.price - self.grid_spacing
+            else:
+                entry_p = filled_level.price + self.grid_spacing
+            exit_p = filled_level.price
+            total_fees = (entry_p + exit_p) * self.quantity * self.fee_rate
+            cycle_pnl = gross_pnl - total_fees
 
             self.risk_manager.add_realized_pnl(cycle_pnl)
             total_pnl = self.risk_manager.get_realized_pnl()
