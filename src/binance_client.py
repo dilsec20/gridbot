@@ -16,7 +16,7 @@ class BinanceClient:
         self.config = config
         self.logger = logger
         self.exchange = None
-        self.symbol = str(config["symbol"]).split(":")[0]
+        self.symbol = str(config.get("symbol", "BTC/USDT")).split(":")[0]
         self.market_symbol = None
         self.market_id = None
         self.actual_leverage = None
@@ -363,49 +363,131 @@ class BinanceClient:
         """Normalize Binance and CCXT futures symbols to the same base symbol."""
         return str(symbol).upper().replace(":USDT", "").replace("/", "")
 
-    def close_position(self, symbol: str | None = None) -> dict | None:
-        """Close the bot's open position for one symbol."""
+    def get_all_open_positions(self) -> list[dict]:
+        """Fetch all active positions across all symbols using CCXT with direct REST API fallback."""
+        active = []
         try:
-            target_symbol = symbol or self.symbol
-            canonical_target = self._canonical_symbol(target_symbol)
             positions = self.exchange.fetch_positions()
-            closed_orders = []
             for pos in positions:
-                pos_symbol = str(pos.get("symbol", ""))
-                if self._canonical_symbol(pos_symbol) != canonical_target:
-                    continue
                 contracts = float(pos.get("contracts", 0) or 0)
                 if contracts > 0:
-                    sym = pos_symbol
-                    side = pos.get("side", "none").lower()
-                    close_side = "sell" if side in ["long", "buy"] else "buy"
-                    self.logger.system(f"Closing {side.upper()} position on {sym}: {contracts} contracts...")
+                    active.append({
+                        "symbol": pos.get("symbol"),
+                        "canonical": self._canonical_symbol(pos.get("symbol")),
+                        "contracts": contracts,
+                        "side": str(pos.get("side", "none")).lower(),
+                        "notional": float(pos.get("notional", 0) or 0),
+                    })
+        except Exception as e:
+            self.logger.warn(f"CCXT fetch_positions check: {e}")
 
+        # If CCXT returned nothing, fallback to direct Binance positionRisk REST endpoint
+        if not active:
+            try:
+                raw_risk = self.exchange.fapiPrivateV2GetPositionRisk()
+                for r in raw_risk:
+                    amt = float(r.get("positionAmt", 0) or 0)
+                    if amt != 0:
+                        raw_sym = r.get("symbol", "")
+                        market = self.exchange.market(raw_sym) if hasattr(self.exchange, "market") and raw_sym in self.exchange.markets else None
+                        ccxt_sym = market["symbol"] if market else f"{raw_sym[:-4]}/USDT:USDT" if raw_sym.endswith("USDT") else raw_sym
+                        active.append({
+                            "symbol": ccxt_sym,
+                            "canonical": self._canonical_symbol(raw_sym),
+                            "contracts": abs(amt),
+                            "side": "long" if amt > 0 else "short",
+                            "notional": abs(float(r.get("notional", 0) or 0)),
+                        })
+            except Exception as e:
+                self.logger.warn(f"Direct positionRisk check error: {e}")
+
+        return active
+
+    def close_all_positions(self) -> list:
+        """Emergency close ALL open positions across all symbols on the account."""
+        closed_orders = []
+        active_positions = self.get_all_open_positions()
+        if not active_positions:
+            self.logger.system("No open positions on account to close.")
+            return []
+
+        for pos in active_positions:
+            sym = pos["symbol"]
+            contracts = pos["contracts"]
+            side = pos["side"]
+            close_side = "sell" if side in ["long", "buy"] else "buy"
+            self.logger.system(f"Emergency closing {side.upper()} position on {sym}: {contracts} contracts...")
+
+            # Attempt 1: Market order
+            try:
+                order = self.exchange.create_order(
+                    symbol=sym,
+                    type="market",
+                    side=close_side,
+                    amount=abs(contracts),
+                    params={"reduceOnly": True},
+                )
+                closed_orders.append(order)
+                self.logger.system(f"✅ Market close executed for {sym}")
+                continue
+            except Exception as err:
+                self.logger.warn(f"Market close failed on {sym} ({err}), trying aggressive Limit ReduceOnly...")
+
+            # Attempt 2: Aggressive Limit IOC ReduceOnly
+            try:
+                ticker = self.exchange.fetch_ticker(sym)
+                current_price = float(ticker.get("last", 0) or 0)
+                info = self.get_symbol_info_for(sym)
+                tick_size = info.get("tick_size", 4)
+                price = float(ticker.get("bid", current_price) or current_price) if close_side == "sell" else float(ticker.get("ask", current_price) or current_price)
+                price = round(price, tick_size)
+                order = self.exchange.create_order(
+                    symbol=sym,
+                    type="limit",
+                    side=close_side,
+                    amount=abs(contracts),
+                    price=price,
+                    params={"reduceOnly": True, "timeInForce": "IOC"},
+                )
+                closed_orders.append(order)
+                self.logger.system(f"✅ Limit IOC close executed for {sym}")
+            except Exception as e2:
+                self.logger.error(f"Failed to close position on {sym}: {e2}")
+
+        return closed_orders
+
+    def close_position(self, symbol: str | None = None) -> dict | None:
+        """Close open position for a specific symbol, or all positions if symbol is None and account has positions."""
+        target_symbol = symbol or self.symbol
+        canonical_target = self._canonical_symbol(target_symbol)
+        active_positions = self.get_all_open_positions()
+
+        # If target symbol matches any position, close that position
+        for pos in active_positions:
+            if pos["canonical"] == canonical_target:
+                sym = pos["symbol"]
+                contracts = pos["contracts"]
+                side = pos["side"]
+                close_side = "sell" if side in ["long", "buy"] else "buy"
+                self.logger.system(f"Closing {side.upper()} position on {sym}: {contracts} contracts...")
+                try:
+                    order = self.exchange.create_order(
+                        symbol=sym,
+                        type="market",
+                        side=close_side,
+                        amount=abs(contracts),
+                        params={"reduceOnly": True},
+                    )
+                    return order
+                except Exception as err:
+                    self.logger.warn(f"Market close failed ({err}), trying aggressive Limit ReduceOnly...")
                     try:
-                        # Attempt 1: Market order
-                        order = self.exchange.create_order(
-                            symbol=sym,
-                            type="market",
-                            side=close_side,
-                            amount=abs(contracts),
-                            params={"reduceOnly": True},
-                        )
-                        closed_orders.append(order)
-                    except Exception as err:
-                        self.logger.warn(f"Market order failed ({err}), placing aggressive Limit ReduceOnly order...")
-                        # Attempt 2: Aggressive Limit ReduceOnly order at current market price
                         ticker = self.exchange.fetch_ticker(sym)
                         current_price = float(ticker.get("last", 0) or 0)
                         info = self.get_symbol_info_for(sym)
                         tick_size = info.get("tick_size", 4)
-
-                        if close_side == "sell":
-                            price = float(ticker.get("bid", current_price) or current_price)
-                        else:
-                            price = float(ticker.get("ask", current_price) or current_price)
-
+                        price = float(ticker.get("bid", current_price) or current_price) if close_side == "sell" else float(ticker.get("ask", current_price) or current_price)
                         price = round(price, tick_size)
-
                         order = self.exchange.create_order(
                             symbol=sym,
                             type="limit",
@@ -414,17 +496,24 @@ class BinanceClient:
                             price=price,
                             params={"reduceOnly": True, "timeInForce": "IOC"},
                         )
-                        closed_orders.append(order)
+                        return order
+                    except Exception as e2:
+                        self.logger.error(f"Failed to close position on {sym}: {e2}")
+                        return None
 
-            if closed_orders:
-                self.logger.system("Position close order submitted for the bot symbol.")
-                return closed_orders[0]
-            else:
-                self.logger.system("No open position to close.")
-                return None
-        except Exception as e:
-            self.logger.error(f"Failed to close position: {e}")
+        # If specific symbol was requested and not found
+        if symbol:
+            self.logger.system(f"No open position found for {symbol}.")
             return None
+
+        # If symbol was None and target_symbol wasn't found, close any other open position
+        if active_positions:
+            self.logger.system(f"Closing remaining active positions ({len(active_positions)} found)...")
+            closed = self.close_all_positions()
+            return closed[0] if closed else None
+
+        self.logger.system("No open position to close.")
+        return None
 
     def trim_position(self, percentage: float = 50.0, symbol: str | None = None) -> dict | None:
         """
@@ -601,15 +690,32 @@ class BinanceClient:
             self.logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
 
-    def cancel_all_orders(self) -> bool:
+    def cancel_all_orders(self, symbol: str | None = None) -> bool:
         """Cancel all open orders for the symbol. Used for emergency shutdown."""
+        target_symbol = symbol or self.symbol
         try:
-            self.exchange.cancel_all_orders(self.symbol)
-            self.logger.system(f"All open orders cancelled for {self.symbol}")
+            self.exchange.cancel_all_orders(target_symbol)
+            self.logger.system(f"All open orders cancelled for {target_symbol}")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to cancel all orders: {e}")
+            self.logger.error(f"Failed to cancel all orders for {target_symbol}: {e}")
             return False
+
+    def cancel_all_orders_all_symbols(self) -> int:
+        """Cancel open orders across any symbols that have open orders."""
+        cancelled = 0
+        try:
+            open_orders = self.exchange.fetch_open_orders()
+            symbols = {o.get("symbol") for o in open_orders if o.get("symbol")}
+            for s in symbols:
+                try:
+                    self.exchange.cancel_all_orders(s)
+                    cancelled += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return cancelled
 
     def get_open_orders(self) -> list:
         """Fetch all open orders for the symbol."""
