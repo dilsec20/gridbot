@@ -10,12 +10,12 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from binance_client import BinanceClient
-from auto_portfolio_manager import get_smart_max_position
-from grid_engine import GridEngine, GridLevel, GridOrderStatus, GridSide
-from quant_engine import QuantEngine
-from risk_manager import RiskManager
-from trading_rules import effective_leverage, is_stablecoin_pair, trading_mode
+from binance_client import BinanceClient  # pyrefly: ignore[missing-import]
+from auto_portfolio_manager import get_smart_max_position  # pyrefly: ignore[missing-import]
+from grid_engine import GridEngine, GridLevel, GridOrderStatus, GridSide  # pyrefly: ignore[missing-import]
+from quant_engine import QuantEngine  # pyrefly: ignore[missing-import]
+from risk_manager import RiskManager  # pyrefly: ignore[missing-import]
+from trading_rules import effective_leverage, is_stablecoin_pair, trading_mode  # pyrefly: ignore[missing-import]
 
 
 class FakeLogger:
@@ -379,7 +379,7 @@ class TradingSafetyTests(unittest.TestCase):
         self.assertEqual(exchange.leverage_calls, [(5, "ADA/USDT")])
 
     def test_websocket_endpoint_matches_resolved_exchange_mode(self):
-        from binance_ws import BinanceWSClient
+        from binance_ws import BinanceWSClient  # pyrefly: ignore[missing-import]
 
         demo_ws = BinanceWSClient(
             {"symbol": "ADA/USDT", "use_demo": True, "use_testnet": True},
